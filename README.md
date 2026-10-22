@@ -2,6 +2,8 @@
 
 F710 手把 → 手把端 MCU → RYLR998 ～ LoRa ～ RYLR998 → STM32。協定定義見 [RC_LORA_PROTOCOL.md](RC_LORA_PROTOCOL.md)。
 
+**接收端改放在 Orin 的版本見 [remote_orin/](remote_orin/README.md)**：F710 → LoRa → Orin → STM32，包含筆電手把程式、Feather RP2040 程式、Orin 程式和上機測試步驟。
+
 ## 檔案
 
 | 檔案 | 用在哪裡 | 內容 |
@@ -10,6 +12,8 @@ F710 手把 → 手把端 MCU → RYLR998 ～ LoRa ～ RYLR998 → STM32。協�
 | `src/joy_api.h/.c` | STM32 | 收 LoRa 資料、判斷失聯、按鍵計數轉成事件、回傳狀態（手把用來震動提示）|
 | `tests/test_joy_api.c` | 電腦 | 離線測試 |
 | `pc_test/rc_pc_test.py`、`joy_sim.c` | 電腦 | 用真的 F710 測試整條路，不需要 LoRa 和 MCU（見下方）|
+| `pc_test/lora_binary_test.py` | 電腦＋兩顆 LoRa | 確認透傳模式能不能原封不動傳二進位資料，並量延遲 |
+| `remote_orin/` | 筆電、Orin、Feather RP2040 | 接收端放在 Orin 的完整版本，見 [remote_orin/README.md](remote_orin/README.md) |
 | `stm32_test/` | 測試用的 NUCLEO-L476RG | 不接馬達的獨立測試專案，收到什麼就印出來；步驟見 [stm32_test/README.md](stm32_test/README.md) |
 
 只用標準 C99，不依賴 HAL 或 FreeRTOS。名稱都加 `rc_`／`joy_` 前綴，不會和現有韌體的 `wire_u16` 等函式衝突。
