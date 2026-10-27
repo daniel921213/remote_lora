@@ -18,7 +18,7 @@ F710 ─▶ 手把 MCU ─▶ RYLR998 ～LoRa～ RYLR998 ─▶ Orin ─▶ STM3
 | 資料夾 | 跑在哪裡 | 內容 |
 |---|---|---|
 | `common/` | 共用 | `rc_proto`：封包格式；`joy_api`：接收端（Orin 用）；`rc_handheld`：手把端邏輯（**筆電和 RP2040 跑同一份**）；`tools.py` |
-| `handheld_pc/` | 筆電 | `handheld_pc.py`：筆電假裝手把 MCU，F710 → LoRa |
+| `handheld_pc/` | 筆電 | `handheld_pc.py`：筆電假裝手把 MCU，F710 → LoRa；`handheld_gui.py`：同樣功能的視窗版測試面板 |
 | `handheld_rp2040/` | Feather RP2040 USB Host | Arduino 程式；`src/` 是 `common/` 的複本 |
 | `orin/` | Orin | `orin_bridge.py`：收 LoRa → 判斷 JOY／ORIN → 送轉速給 STM32；`fake_stm32.py`：沒有 STM32 時用的模擬 |
 | `tests/` | 電腦 | `run_tests.py`：全部離線測試 |
@@ -75,6 +75,8 @@ cd remote_orin/handheld_pc
 python handheld_pc.py --port COM7
 ```
 
+想用視窗看，改執行 `python handheld_gui.py --port COM7`，功能完全一樣。最上面四個色塊顯示 LoRa 連線、Orin 模式、STM32 狀態和 F710 是否連接：綠色是正常、黃色是等待、紅色是異常或失聯、藍色是 ORIN、灰色是還沒有資料。下面依序是搖桿位置、按鍵（按著時亮起，數字是按了幾次）、送出和回覆的筆數，以及事件紀錄。
+
 操作順序：
 
 1. F710 震 2 下：已經連上，Orin 在等 STM32 進 AUTO。
@@ -128,7 +130,7 @@ python3 orin_bridge.py --lora-port /dev/ttyUSB0 --fake-stm32 --fake-auto
    python3 orin_bridge.py --lora-port /dev/ttyUSB0 --stm32-port /dev/ttyACM0
    ```
 
-3. 筆電執行 `python handheld_pc.py --port COM7`，F710 震 2 下。
+3. 筆電執行 `python handheld_gui.py --port COM7`（或文字版 `handheld_pc.py`），F710 震 2 下。
 4. R12 搖桿回中間、液壓開關在保持、熄火開關在允許位置，等 1 秒後按 **A**。F710 震 1 下，進入 JOY。
 5. 輕推搖桿，履帶跟著轉。
 6. 按 **RB** 切到 ORIN，履帶以測試轉速往前；再按 RB 回到 JOY。

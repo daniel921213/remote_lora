@@ -95,65 +95,88 @@ class DemoGamepad:
         return 'q' if self.elapsed() >= self.END else None
 
 
+class Session:
+    """The handheld loop shared by the console (run) and the panel (handheld_gui.py).
+    Call step() about every 10 ms; log receives ready-to-show lines."""
+
+    def __init__(self, gamepad, port, log):
+        self.gamepad, self.port, self.log = gamepad, port, log
+        self.start = time.monotonic()
+        self.handheld = Handheld(0)
+        self.reading = (False, 0, 0, 0)  # (connected, drive, turn, buttons) from the last step
+        self.info = self.handheld.info()
+        self.presses = [0] * len(SLOTS)  # per slot since start; the wire counters wrap at 16
+        self.sent = 0
+        self.last_reply_at = None
+        self.rumbling = False
+        self.shown_send = self.shown_state = None
+
+    def emit(self, text):
+        self.log(f'[{time.monotonic() - self.start:5.1f}s] {text}')
+
+    def step(self):
+        now = time.monotonic()
+        now_ms = int((now - self.start) * 1000)
+
+        reading = self.reading = self.gamepad.read()
+        pressed = self.handheld.sample(*reading)
+        for slot, (name, function) in enumerate(SLOTS):
+            if pressed & (1 << slot):
+                self.presses[slot] += 1
+                self.emit(f'按下 {name}（{function}）')
+
+        line = self.handheld.take_line(now_ms)
+        if line:
+            self.port.write(line)
+            self.sent += 1
+            connected, drive, turn, _ = reading
+            if (connected, drive, turn) != self.shown_send:
+                self.emit(f'送出 前後 {drive:+d}、轉向 {turn:+d}' if connected else '送出 手把斷線（gamepad_ok=0）')
+                self.shown_send = (connected, drive, turn)
+
+        self.handheld.feed(self.port.read(self.port.in_waiting or 1), now_ms)
+        events = self.handheld.poll(now_ms)
+        replies_before = self.info.replies
+        info = self.info = self.handheld.info()
+        if info.replies != replies_before:
+            self.last_reply_at = now
+        if events & EV_LINK_UP:
+            self.emit(f'連上 Orin：{INDICATOR_NAMES[info.indicator]}，STM32 {STATE_NAMES.get(info.state, info.state)}'
+                      f' → {RUMBLE_TEXT[info.indicator]}')
+        elif events & EV_INDICATOR:
+            self.emit(f'狀態 → {INDICATOR_NAMES[info.indicator]} → {RUMBLE_TEXT[info.indicator]}')
+        if events & EV_LINK_LOST:
+            self.emit('0.3 秒沒收到 Orin 回覆：失聯')
+        if events & EV_ALARM:
+            self.emit('→ 長震 1 秒（沒連上，每 3 秒重複一次）')
+        if info.link_up and info.state != self.shown_state:
+            if self.shown_state is not None:
+                self.emit(f'STM32 狀態 → {STATE_NAMES.get(info.state, info.state)}')
+            self.shown_state = info.state
+
+        on = self.handheld.rumble(now_ms)
+        if on != self.rumbling:
+            self.gamepad.vibrate(on)
+            self.rumbling = on
+
+    def close(self):
+        self.gamepad.vibrate(False)
+        self.handheld.close()
+
+
 def run(gamepad, key, port):
-    start = time.monotonic()
-    handheld = Handheld(0)
-    shown_send = shown_state = None
-    rumbling = False
-
-    def log(text):
-        print(f'[{time.monotonic() - start:5.1f}s] {text}', flush=True)
-
+    session = Session(gamepad, port, lambda line: print(line, flush=True))
     try:
         while True:
-            now = time.monotonic()
-            now_ms = int((now - start) * 1000)
-
-            reading = gamepad.read()
-            pressed = handheld.sample(*reading)
-            for slot, (name, function) in enumerate(SLOTS):
-                if pressed & (1 << slot):
-                    log(f'按下 {name}（{function}）')
-
-            line = handheld.take_line(now_ms)
-            if line:
-                port.write(line)
-                connected, drive, turn, _ = reading
-                content = (connected, drive, turn)
-                if content != shown_send:
-                    log(f'送出 前後 {drive:+d}、轉向 {turn:+d}' if connected else '送出 手把斷線（gamepad_ok=0）')
-                    shown_send = content
-
-            handheld.feed(port.read(port.in_waiting or 1), now_ms)
-            events = handheld.poll(now_ms)
-            info = handheld.info()
-            if events & EV_LINK_UP:
-                log(f'連上 Orin：{INDICATOR_NAMES[info.indicator]}，STM32 {STATE_NAMES.get(info.state, info.state)}'
-                    f' → {RUMBLE_TEXT[info.indicator]}')
-            elif events & EV_INDICATOR:
-                log(f'狀態 → {INDICATOR_NAMES[info.indicator]} → {RUMBLE_TEXT[info.indicator]}')
-            if events & EV_LINK_LOST:
-                log('0.3 秒沒收到 Orin 回覆：失聯')
-            if events & EV_ALARM:
-                log('→ 長震 1 秒（沒連上，每 3 秒重複一次）')
-            if info.link_up and info.state != shown_state:
-                if shown_state is not None:
-                    log(f'STM32 狀態 → {STATE_NAMES.get(info.state, info.state)}')
-                shown_state = info.state
-
-            on = handheld.rumble(now_ms)
-            if on != rumbling:
-                gamepad.vibrate(on)
-                rumbling = on
-
+            began = time.monotonic()
+            session.step()
             if key() == 'q':
                 break
-            time.sleep(max(0.0, SAMPLE_PERIOD - (time.monotonic() - now)))
+            time.sleep(max(0.0, SAMPLE_PERIOD - (time.monotonic() - began)))
     except KeyboardInterrupt:
         pass
     finally:
-        gamepad.vibrate(False)
-        handheld.close()
+        session.close()
 
 
 def main():
