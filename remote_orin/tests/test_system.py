@@ -162,6 +162,12 @@ class TestFakeStm32(unittest.TestCase):
         self.assertEqual(self.stm32.target, [0.0, 0.0])
         self.stm32.key('a')
         self.stm32.command(5, -5)
+        self.assertEqual(self.stm32.target, [0.0, 0.0])  # AUTO alone is not ARM
+        for _ in range(12):
+            self.clock.t += 0.05
+            self.stm32.command()
+        self.stm32.command(arm_auto=True)
+        self.stm32.command(5, -5)
         self.assertEqual(self.stm32.target, [5.0, -5.0])
 
     def test_auto_stops_when_commands_pause(self):
@@ -231,6 +237,13 @@ class TestEndToEnd(unittest.TestCase):
 
         self.stm32.key('a')  # operator presses A on the R12
         self.run_for(0.3)
+        self.assertEqual(self.handheld.info().indicator, rl.IND_WAITING)
+        self.run_for(0.3, drive=100)
+        self.assertEqual(self.stm32.target, [0.0, 0.0])  # motion is blocked before manual ARM
+        self.run_for(0.2)
+        for key in 'ARM\n':
+            self.bridge.key(key)
+        self.run_for(0.8)
         self.assertTrue(self.take_events() & EV_INDICATOR)
         self.assertEqual(self.handheld.info().indicator, rl.IND_JOY)
 
@@ -255,6 +268,15 @@ class TestEndToEnd(unittest.TestCase):
         self.assertIn('遙控器失聯：停車，回到 JOY', self.logs)
         self.run_for(0.3)
         self.assertEqual(self.stm32.state, rl.AUTO)
+        self.run_for(0.3, drive=100)
+        self.assertEqual(self.stm32.target, [0.0, 0.0])  # reconnection cannot resume motion
+        self.run_for(0.2)
+        for key in 'ARM\n':
+            self.bridge.key(key)
+        self.run_for(0.3)
+        self.run_for(0.3, drive=100)
+        self.assertEqual(self.stm32.target, [5.0, 5.0])
+        self.run_for(0.2)
 
         self.take_events()
         self.radio.up = False  # LoRa cut: both ends notice within 0.3 s and the tracks stay stopped

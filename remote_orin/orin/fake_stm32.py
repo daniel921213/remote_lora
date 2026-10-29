@@ -30,6 +30,10 @@ class FakeStm32:
         self.state = STOPPED
         self.faults = 0
         self.sequence = 0
+        self.ack_sequence = 0xffffffff
+        self.lease = 0
+        self.run_request = False
+        self.zero_since = now
         self.target = [0.0, 0.0]
         self.rpm = [0.0, 0.0]
         self.last_command = now
@@ -41,6 +45,8 @@ class FakeStm32:
 
     def _set(self, state, reason):
         if state != self.state:
+            self.run_request = False
+            self.zero_since = self.clock()
             self.state = state
             self.log(f'［假 STM32］狀態 → {STATE_NAMES_ZH[state]}（{reason}）')
         if state == AUTO:
@@ -81,16 +87,22 @@ class FakeStm32:
                 step = SLEW_RPM_PER_S * dt
                 self.rpm[i] += max(-step, min(step, self.target[i] - self.rpm[i]))
         if now >= self.next_telemetry:
+            self.lease = (self.lease + 1) & 0xffffffff
             self.next_telemetry = now + TELEMETRY_PERIOD
             self.status_at = now
-            self.status = {'type': 'status', 'sequence': self.sequence, 'lease': 1, 'state': self.state,
-                           'faults': self.faults, 'rpm': [round(r, 2) for r in self.rpm], 'health': 0}
+            ready = self.state == AUTO and not self.faults and now - self.zero_since >= 0.5
+            health = 128 | (64 if ready else 0) | (32 if self.run_request else 0)
+            self.status = {'type': 'status', 'sequence': self.ack_sequence, 'lease': self.lease, 'state': self.state,
+                           'faults': self.faults, 'rpm': [round(r, 2) for r in self.rpm], 'health': health,
+                           'pwm': [1500 + round(r * 10) for r in self.rpm],
+                           'explicit_arm_supported': True, 'arm_ready': ready,
+                           'run_request': self.run_request}
 
     def poll(self):
         self._update()
         return []
 
-    def command(self, left=0, right=0, hydraulic=0, estop=False, engine_kill=False):
+    def command(self, left=0, right=0, hydraulic=0, estop=False, engine_kill=False, arm_auto=False):
         self._update()
         if estop or engine_kill:
             if self.state != ESTOP:
@@ -98,11 +110,18 @@ class FakeStm32:
             return []
         if self.status is None or self.clock() - self.status_at > FRESH:
             raise ConnectionError('No fresh MCU telemetry; motion command not sent.')
-        self.sequence += 1
+        self.ack_sequence = self.sequence
+        self.sequence = (self.sequence + 1) & 0xffffffff
+        if arm_auto and (left or right or hydraulic):
+            raise ValueError('ARM must be a zero command')
+        if left or right or hydraulic:
+            self.zero_since = self.clock()
         if abs(left) > STM32_LIMIT_RPM or abs(right) > STM32_LIMIT_RPM:
             self._fault(FAULT_JETSON, '轉速超過 ±40')
         elif self.state == AUTO:
-            self.target = [float(left), float(right)]
+            if arm_auto and self.status.get('arm_ready'):
+                self.run_request = True
+            self.target = [float(left), float(right)] if self.run_request else [0.0, 0.0]
             self.last_command = self.clock()
         return []
 

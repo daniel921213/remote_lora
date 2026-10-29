@@ -47,7 +47,7 @@ def c_tests():
 
 
 def python_tests():
-    ran = subprocess.run([sys.executable, '-m', 'unittest', 'test_system'], cwd=TESTS, capture_output=True,
+    ran = subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-p', 'test_*.py'], cwd=TESTS, capture_output=True,
                          text=True, encoding='utf-8', env=dict(os.environ, PYTHONIOENCODING='utf-8'))
     lines = [line for line in ran.stderr.strip().splitlines() if line]
     summary = ' '.join(lines[-2:]) if len(lines) >= 2 else ran.stderr

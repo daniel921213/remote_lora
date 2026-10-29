@@ -56,8 +56,9 @@ def utf8_console():
 class Keys:
     """Single key presses without Enter. Returns None when no key (or no terminal) is available."""
 
-    def __init__(self):
+    def __init__(self, preserve_case=False):
         self.restore = None
+        self.preserve_case = preserve_case
         if os.name == 'nt':
             import msvcrt
             self.msvcrt = msvcrt
@@ -71,12 +72,17 @@ class Keys:
 
     def get(self):
         if os.name == 'nt':
-            return self.msvcrt.getwch().lower() if self.msvcrt.kbhit() else None
+            if not self.msvcrt.kbhit():
+                return None
+            key = self.msvcrt.getwch()
+            return key if self.preserve_case else key.lower()
         if self.restore is None:
             return None
         import select
         if select.select([sys.stdin], [], [], 0)[0]:
-            return sys.stdin.read(1).lower()
+            # TextIO read(1) can buffer the rest of pasted ARM\n, hiding it from select().
+            key = os.read(sys.stdin.fileno(), 1).decode('utf-8', errors='ignore')
+            return key if self.preserve_case else key.lower()
         return None
 
     def close(self):
