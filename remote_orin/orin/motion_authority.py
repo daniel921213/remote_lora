@@ -20,7 +20,7 @@ class MotionAuthority:
 
     def revoke(self, reason):
         if self.phase != 'LOCKED':
-            self.log('ARM 已取消：' + reason + '；需重新輸入 ARM 並按 Enter')
+            self.log('ARM 已取消：' + reason + '；需重新按 LB 或輸入 ARM')
         self.phase = 'LOCKED'
         self.arm_sequence = None
 

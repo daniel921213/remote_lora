@@ -77,7 +77,7 @@ class RemoteLogic:
                 self._to_joy()
                 messages.append('RB：切到 JOY（手動），搖桿先回中間才會動')
         if events & EV_UNLOCK:
-            messages.append('LB：解除鎖定要用 R12，Orin 沒有解鎖權')
+            messages.append('LB：申請 ARM（解開行走鎖）')
         for bit, name in UNSUPPORTED:
             if events & bit:
                 messages.append(f'{name}：這次測試還不支援，忽略')

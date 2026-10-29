@@ -31,7 +31,8 @@ F710 ─▶ 手把 MCU ─▶ RYLR998 ～LoRa～ RYLR998 ─▶ Orin ─▶ STM3
 | RB | JOY ⇄ ORIN 切換。ORIN 模式下履帶以 `--auto-rpm`（預設 5 RPM）往前，代替還沒有的導航程式。切回 JOY 時，搖桿要先回中間才會動 |
 | B | 停車，回到 JOY |
 | BACK | 熄火並鎖定停車（STM32 進 ESTOP，要用 R12 恢復） |
-| START、X、Y、A、LB、十字鍵 | 這次不支援，Orin 只會印出訊息 |
+| LB | ARM：解開行走鎖，等同在 Orin 輸入 `ARM`（見 [ARM_USAGE.md](ARM_USAGE.md)）。要在 AUTO、JOY、搖桿置中時按 |
+| START、X、Y、A、十字鍵 | 這次不支援，Orin 只會印出訊息 |
 
 自動停車的情況：
 
@@ -80,7 +81,7 @@ python handheld_pc.py --port COM7
 操作順序：
 
 1. F710 震 2 下：已經連上，Orin 在等 STM32 進 AUTO。
-2. 在**視窗 A** 按 `a`，模擬按 R12 的 A。F710 震 1 下，進入 JOY。
+2. 在**視窗 A** 按 `a`，模擬按 R12 的 A。搖桿放開，等半秒後按 **LB**（ARM），F710 震 1 下，進入 JOY。
 3. 推搖桿，視窗 A 的「命令」跟著變。
 4. 按 RB：F710 震 3 下，進入 ORIN，命令變成固定的測試轉速。
 5. 再按 RB 回到 JOY。按 B 停車、按 BACK 熄火（假 STM32 進 ESTOP，在視窗 A 按 `r` 恢復）。
@@ -131,7 +132,7 @@ python3 orin_bridge.py --lora-port /dev/ttyUSB0 --fake-stm32 --fake-auto
    ```
 
 3. 筆電執行 `python handheld_gui.py --port COM7`（或文字版 `handheld_pc.py`），F710 震 2 下。
-4. R12 搖桿回中間、液壓開關在保持、熄火開關在允許位置，等 1 秒後按 **A**。F710 震 1 下，進入 JOY。
+4. R12 搖桿回中間、液壓開關在保持、熄火開關在允許位置，等 1 秒後按 **A**。F710 搖桿放開，按 **LB**（ARM），Orin 顯示「ARM 成功」、F710 震 1 下，進入 JOY。
 5. 輕推搖桿，履帶跟著轉。
 6. 按 **RB** 切到 ORIN，履帶以測試轉速往前；再按 RB 回到 JOY。
 7. 測停止：按 B 停車；拔掉筆電那顆 LoRa，0.3 秒內停；在 Orin 按 `q` 結束程式，會送 ESTOP。

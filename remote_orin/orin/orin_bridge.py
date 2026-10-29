@@ -20,7 +20,7 @@ from pathlib import Path
 
 from fake_stm32 import FakeStm32
 from joy_lib import Joy, tools
-from remote_logic import STATE_NAMES_ZH, RemoteLogic
+from remote_logic import EV_UNLOCK, STATE_NAMES_ZH, RemoteLogic
 from motion_authority import MotionAuthority
 
 HERE = Path(__file__).resolve().parent
@@ -74,6 +74,8 @@ class Bridge:
         command = self.logic.step(rc, state)
         for message in command.messages:
             self.log(message)
+        if rc.events & EV_UNLOCK:  # F710 LB: the same request as typing ARM here
+            self.authority.request()
         status = self.stm32.status
         authority_status = dict(status, _received_at=self.stm32.status_at) if status else None
         was_active = self.authority.active
@@ -217,7 +219,7 @@ def main():
     print(f'Orin 端：LoRa {args.lora_port}；{where}')
     print(f'JOY 搖桿推到底 {args.max_rpm:g} RPM；ORIN 測試轉速 {args.auto_rpm:g} RPM。'
           '按 q 結束（結束時會送 ESTOP，要用 R12 恢復）。')
-    print('行走預設鎖定。R12 進 AUTO、F710 置中後，在這裡輸入 ARM 並按 Enter；失聯後需重新確認。')
+    print('行走預設鎖定。R12 進 AUTO、F710 置中後，按 F710 的 LB（或在這裡輸入 ARM 並按 Enter）；失聯後需重新確認。')
 
     bridge = Bridge(lora, stm32, logic, joy, log, start=start)
     try:

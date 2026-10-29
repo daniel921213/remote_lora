@@ -148,7 +148,7 @@ class TestRemoteLogic(unittest.TestCase):
         events = rl.EV_ENGINE_ON | rl.EV_GEAR_BLADE | rl.EV_UNLOCK | rl.EV_BLADE_DOWN
         messages = self.logic.step(Rc(events=events), rl.AUTO).messages
         self.assertEqual(len(messages), 4)
-        self.assertTrue(any('R12' in m for m in messages))
+        self.assertIn('LB：申請 ARM（解開行走鎖）', messages)
 
 
 class TestFakeStm32(unittest.TestCase):
@@ -240,9 +240,11 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(self.handheld.info().indicator, rl.IND_WAITING)
         self.run_for(0.3, drive=100)
         self.assertEqual(self.stm32.target, [0.0, 0.0])  # motion is blocked before manual ARM
+        self.run_for(0.15, drive=100, buttons=['LB'])  # LB with the stick pushed is refused
         self.run_for(0.2)
-        for key in 'ARM\n':
-            self.bridge.key(key)
+        self.assertIn('ARM 拒絕：先回 JOY 並放開搖桿', self.logs)
+        self.assertEqual(self.bridge.authority.phase, 'LOCKED')
+        self.run_for(0.15, buttons=['LB'])  # F710 LB does what typing ARM on the Orin does
         self.run_for(0.8)
         self.assertTrue(self.take_events() & EV_INDICATOR)
         self.assertEqual(self.handheld.info().indicator, rl.IND_JOY)
@@ -271,7 +273,7 @@ class TestEndToEnd(unittest.TestCase):
         self.run_for(0.3, drive=100)
         self.assertEqual(self.stm32.target, [0.0, 0.0])  # reconnection cannot resume motion
         self.run_for(0.2)
-        for key in 'ARM\n':
+        for key in 'ARM\n':  # the keyboard still works as a backup
             self.bridge.key(key)
         self.run_for(0.3)
         self.run_for(0.3, drive=100)
