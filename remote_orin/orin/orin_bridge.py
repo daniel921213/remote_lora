@@ -1,13 +1,10 @@
-"""Orin side: F710 packets from the LoRa module -> JOY/ORIN choice -> STM32 RPM commands.
+"""Orin 主程式：LoRa 收 F710 → 決定聽搖桿（JOY）還是導航（ORIN）→ 送轉速給 STM32。
 
-  python3 orin_bridge.py --lora-port /dev/ttyUSB0 --stm32-port /dev/ttyACM0
-  python orin_bridge.py --lora-port COM8 --fake-stm32               laptop test without an STM32
-  python orin_bridge.py --lora-port COM8 --fake-stm32 --fake-auto   ... entering AUTO by itself
+  python3 orin_bridge.py --lora-port /dev/lora_gs --stm32-port /dev/ttyACM0
+  python orin_bridge.py --lora-port COM8 --fake-stm32               沒 STM32，筆電上測
+  python orin_bridge.py --lora-port COM8 --fake-stm32 --fake-auto   假 STM32 會自己進 AUTO
 
-STM32 commands go through our independent new_mower_link.py, which must be the
-only program on the STM32 port: do not run monitor at the same time. Commands go out every
-50 ms, and at once on a stop. On exit the bridge sends a latched ESTOP, as the teammate's
-guide asks for an abnormal exit; recovering needs the R12.
+STM32 的串口一次只能一支程式開，跑這支時 monitor 要先關。結束時會送 ESTOP 把車鎖住。
 """
 
 import argparse
@@ -24,16 +21,16 @@ from remote_logic import EV_UNLOCK, STATE_NAMES_ZH, RemoteLogic
 from motion_authority import MotionAuthority
 
 HERE = Path(__file__).resolve().parent
-STEP = 0.01            # loop period
-COMMAND_PERIOD = 0.05  # 20 Hz as the STM32 guide recommends; AUTO stops after 200 ms without one
-FRESH = 0.15           # older telemetry counts as no STM32 state (MowerLink uses the same limit)
+STEP = 0.01            # 主迴圈 10 ms 一圈
+COMMAND_PERIOD = 0.05  # 50 ms 送一次命令；STM32 超過 200 ms 沒收到會自己停
+FRESH = 0.15           # STM32 回報超過這個時間沒更新，就當它沒回應
 DISPLAY_PERIOD = 0.2
 MOWER_LINK_DIRS = [HERE]
 INDICATOR_TEXT = {0: 'ORIN', 1: 'JOY', 2: '等待 AUTO', 3: '異常'}
 
 
 class Bridge:
-    """One pass of step() reads the LoRa link, answers the handheld and commands the STM32."""
+    """每叫一次 step()：收 LoRa、回手把、送命令給 STM32。"""
 
     def __init__(self, lora, stm32, logic, joy, log, clock=time.monotonic, start=None):
         self.lora, self.stm32, self.logic, self.joy, self.log, self.clock = lora, stm32, logic, joy, log, clock
@@ -46,6 +43,7 @@ class Bridge:
         self.last_applied = (0.0, 0.0)
 
     def key(self, key):
+        # 鍵盤打 ARM 再按 Enter，跟按 LB 一樣（備用）
         if key in ('\r', '\n'):
             if self.key_buffer == 'ARM':
                 self.authority.request()
@@ -66,15 +64,17 @@ class Bridge:
     def step(self):
         now = self.clock()
         now_ms = int((now - self.start) * 1000)
+        # 收遙控器、收 STM32
         self.joy.feed(self.lora.read(self.lora.in_waiting or 1), now_ms)
         rc = self.joy.poll(now_ms)
         self.stm32.poll()
         state = self.stm32_state(now)
 
+        # 照搖桿算轉速；按 LB 就申請解鎖
         command = self.logic.step(rc, state)
         for message in command.messages:
             self.log(message)
-        if rc.events & EV_UNLOCK:  # F710 LB: the same request as typing ARM here
+        if rc.events & EV_UNLOCK:
             self.authority.request()
         status = self.stm32.status
         authority_status = dict(status, _received_at=self.stm32.status_at) if status else None
@@ -82,10 +82,11 @@ class Bridge:
         arm = self.authority.update(authority_status, state is not None, rc, self.logic.mode,
                                     command.engine_kill, now)
         applied = command
+        # 沒解鎖就一律送 0
         if not self.authority.active:
             applied = command._replace(left=0.0, right=0.0, urgent=command.urgent or was_active,
                                        indicator=command.indicator if command.indicator == 3 else 2)
-        # Reply after deciding, so it carries the state this very packet led to.
+        # 回手把，再送 STM32（平常 50 ms 一次，要停車就馬上送）
         self.joy.set_status(applied.indicator, 0 if state is None else state)
         reply = self.joy.take_reply()
         if reply:
@@ -100,11 +101,13 @@ class Bridge:
         try:
             if arm:
                 self.stm32.command(arm_auto=True)
+                # command() 送完序號會 +1，減回去才是 ARM 那包的序號
                 self.authority.arm_sent((self.stm32.sequence - 1) & 0xffffffff, now)
             else:
                 self.stm32.command(left=command.left, right=command.right, engine_kill=command.engine_kill)
             self.last_applied = (command.left, command.right)
         except ConnectionError:
+            # STM32 沒回報或寫不進去：先鎖起來，STM32 自己 200 ms 後會停
             self.authority.revoke('串口寫入失敗或沒有新遙測')
             if not self.command_error:
                 self.log('STM32 沒有新的遙測：暫停送行走命令（STM32 自己 200 ms 後會停）')
@@ -116,6 +119,7 @@ class Bridge:
         self.logic.sent()
 
     def display(self, rc, state, command, now):
+        # Orin 畫面那一行：要求＝搖桿想要的、送出＝真的送的、實測＝STM32 量到的
         status = self.stm32.status
         key = (self.logic.mode, bool(rc.link_ok), command.left, command.right, state,
                repr(status and {k: status.get(k) for k in ('faults', 'rpm', 'pwm', 'health')}),
@@ -125,7 +129,7 @@ class Bridge:
         stm32 = '沒回應' if state is None else f'{STATE_NAMES_ZH.get(state, state)} faults={status["faults"]}'
         measured = ''
         if state is not None:
-            left, right = (round(rpm, 1) + 0.0 for rpm in status['rpm'])  # + 0.0 turns -0.0 into 0.0
+            left, right = (round(rpm, 1) + 0.0 for rpm in status['rpm'])
             measured = f'｜實測 左 {left:+.1f} 右 {right:+.1f}'
             measured += (f'｜PWM {status.get("pwm")}｜ARM {self.authority.phase}'
                          f' ready={int(status.get("arm_ready", False))}'
@@ -138,6 +142,7 @@ class Bridge:
         self.shown, self.shown_at = key, now
 
     def shutdown(self):
+        # 結束前送 3 次 ESTOP 把車鎖住
         for _ in range(3):
             try:
                 self.stm32.command(estop=True)
@@ -147,6 +152,7 @@ class Bridge:
 
 
 def load_mower_link(directory):
+    # 只用同資料夾的 new_mower_link.py，不會用組員舊版的
     for folder in [Path(directory)] if directory else MOWER_LINK_DIRS:
         source = folder / 'new_mower_link.py'
         if source.exists():
@@ -158,11 +164,11 @@ def load_mower_link(directory):
 
 
 def check_port_free(port):
+    # 串口被別的程式占用就停下來
     if os.name == 'posix':
         result = subprocess.run(['fuser', os.path.realpath(port)], capture_output=True, text=True)
         if result.returncode == 0:
             sys.exit(f'串口 {port} 已被使用（PID {result.stdout.strip()}）；請先確認占用程式，不會自動關閉它。')
-
 
 def main():
     parser = argparse.ArgumentParser(description='Orin 端：收 F710 的 LoRa 封包，判斷 JOY／ORIN，送轉速給 STM32')
@@ -224,18 +230,21 @@ def main():
     bridge = Bridge(lora, stm32, logic, joy, log, start=start)
     try:
         if not args.fake_stm32:
+            # 先等 STM32 第一筆回報，最多 2 秒
             deadline = time.monotonic() + 2.0
             while stm32.status is None and time.monotonic() < deadline:
                 stm32.poll()
                 time.sleep(0.01)
             if stm32.status is None:
                 log('⚠ 2 秒內沒收到 STM32 遙測：確認 USB 線和串口名稱，以及沒有其他程式開著這個埠')
+        # 主迴圈
         while True:
             began = time.monotonic()
             bridge.step()
             key = keys.get()
             if key == 'q':
                 break
+            # 假 STM32 時 a/b/c/r 是假裝按 R12
             if key and args.fake_stm32 and key in 'abcr' and not bridge.key_buffer:
                 stm32.key(key)
             elif key:
@@ -244,6 +253,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        # 不管怎麼結束都送 ESTOP
         log('結束：送 ESTOP 給 STM32')
         bridge.shutdown()
         keys.close()
