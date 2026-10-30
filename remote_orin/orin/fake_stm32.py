@@ -7,6 +7,7 @@ and motion commands need telemetry younger than 150 ms. It is not a model of the
 
 Keys while orin_bridge.py --fake-stm32 runs: a = R12 A (AUTO), b = R12 B (MANUAL),
 c = R12 C (stop tracks), r = recover from ESTOP the way the R12 procedure would.
+CLEAR_ESTOP (F710 START) works after 1 s of zero commands in ESTOP; the R12 checks are assumed fine.
 """
 
 import math
@@ -91,18 +92,20 @@ class FakeStm32:
             self.next_telemetry = now + TELEMETRY_PERIOD
             self.status_at = now
             ready = self.state == AUTO and not self.faults and now - self.zero_since >= 0.5
-            health = 128 | (64 if ready else 0) | (32 if self.run_request else 0)
+            clear_ready = self.state == ESTOP and now - self.zero_since >= 1.0
+            health = 128 | (64 if ready else 0) | (32 if self.run_request else 0) | (1 if clear_ready else 0)
             self.status = {'type': 'status', 'sequence': self.ack_sequence, 'lease': self.lease, 'state': self.state,
                            'faults': self.faults, 'rpm': [round(r, 2) for r in self.rpm], 'health': health,
                            'pwm': [1500 + round(r * 10) for r in self.rpm],
                            'explicit_arm_supported': True, 'arm_ready': ready,
-                           'run_request': self.run_request}
+                           'run_request': self.run_request, 'clear_ready': clear_ready}
 
     def poll(self):
         self._update()
         return []
 
-    def command(self, left=0, right=0, hydraulic=0, estop=False, engine_kill=False, arm_auto=False):
+    def command(self, left=0, right=0, hydraulic=0, estop=False, engine_kill=False, clear_estop=False,
+                arm_auto=False):
         self._update()
         if estop or engine_kill:
             if self.state != ESTOP:
@@ -112,8 +115,13 @@ class FakeStm32:
             raise ConnectionError('No fresh MCU telemetry; motion command not sent.')
         self.ack_sequence = self.sequence
         self.sequence = (self.sequence + 1) & 0xffffffff
-        if arm_auto and (left or right or hydraulic):
-            raise ValueError('ARM must be a zero command')
+        if (arm_auto or clear_estop) and (left or right or hydraulic):
+            raise ValueError('ARM/CLEAR_ESTOP must be a zero command')
+        if clear_estop:
+            if self.state == ESTOP and self.status.get('clear_ready'):
+                self.faults = 0
+                self._set(AUTO, 'Orin 送 CLEAR_ESTOP')
+            return []
         if left or right or hydraulic:
             self.zero_since = self.clock()
         if abs(left) > STM32_LIMIT_RPM or abs(right) > STM32_LIMIT_RPM:

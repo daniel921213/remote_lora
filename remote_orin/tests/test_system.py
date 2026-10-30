@@ -189,6 +189,18 @@ class TestFakeStm32(unittest.TestCase):
         self.stm32.key('r')
         self.assertEqual((self.stm32.state, self.stm32.faults), (rl.STOPPED, 0))
 
+    def test_clear_estop_needs_one_second_of_zero(self):
+        self.stm32.key('a')
+        self.stm32.command(estop=True)
+        self.stm32.command(clear_estop=True)
+        self.assertEqual(self.stm32.state, rl.ESTOP)  # too early: ignored
+        for _ in range(21):
+            self.clock.t += 0.05
+            self.stm32.command()
+        self.assertTrue(self.stm32.status['clear_ready'])
+        self.stm32.command(clear_estop=True)
+        self.assertEqual((self.stm32.state, self.stm32.faults, self.stm32.run_request), (rl.AUTO, 0, False))
+
     def test_over_limit_stops(self):
         self.stm32.key('a')
         self.stm32.command(41, 0)
@@ -293,6 +305,27 @@ class TestEndToEnd(unittest.TestCase):
         self.run_for(0.3)
         self.assertEqual((self.stm32.state, self.stm32.faults), (rl.ESTOP, 512))
         self.assertEqual(self.handheld.info().indicator, rl.IND_FAULT)
+
+        self.run_for(0.15, buttons=['START'])  # F710 START right away: the STM32 is not ready to clear
+        self.run_for(0.2)
+        self.assertIn('START 拒絕：STM32 還不能解除（故障沒排除、R12 搖桿沒回中、引擎開關不在 HOLD 或編碼器異常）',
+                      self.logs)
+        self.run_for(1.0)
+        self.run_for(0.15, drive=100, buttons=['START'])  # stick pushed: refused
+        self.run_for(0.2)
+        self.assertIn('START 拒絕：先放開搖桿', self.logs)
+        self.assertEqual(self.stm32.state, rl.ESTOP)
+        self.run_for(0.15, buttons=['START'])
+        self.run_for(0.3)
+        self.assertIn('ESTOP 已解除：STM32 回到 AUTO 待命，放開搖桿按 LB 做 ARM', self.logs)
+        self.assertEqual(self.stm32.state, rl.AUTO)
+        self.assertEqual(self.handheld.info().indicator, rl.IND_WAITING)
+        self.run_for(0.3, drive=100)
+        self.assertEqual(self.stm32.target, [0.0, 0.0])  # cleared is not armed
+        self.run_for(0.15, buttons=['LB'])
+        self.run_for(0.8)
+        self.run_for(0.3, drive=100)
+        self.assertEqual(self.stm32.target, [5.0, 5.0])
 
     def test_frame_matches_independent_packer(self):
         handheld = Handheld(0)
