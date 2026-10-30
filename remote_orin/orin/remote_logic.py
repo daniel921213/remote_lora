@@ -25,7 +25,7 @@ JOY, ORIN = 'JOY', 'ORIN'
 STM32_LIMIT_RPM = 40.0  # the STM32 treats any target beyond its configured +/-40 as invalid and stops
 KILL_REPEATS = 3        # ENGINE_KILL goes out in this many consecutive commands
 
-UNSUPPORTED = [(EV_ENGINE_ON, 'START 引擎通電'), (EV_GEAR_BLADE, 'X 刀具檔'), (EV_GEAR_FAN, 'Y 風機檔'),
+UNSUPPORTED = [(EV_GEAR_BLADE, 'X 刀具檔'), (EV_GEAR_FAN, 'Y 風機檔'),
                (EV_GEAR_NEUTRAL, 'A 離合空檔'), (EV_BLADE_UP, '十字鍵上 刀頭上升'),
                (EV_BLADE_DOWN, '十字鍵下 刀頭下降')]
 
@@ -63,7 +63,7 @@ class RemoteLogic:
             messages.append('警告：遙控資料可能漏掉（OVERFLOW）')
         if events & EV_ENGINE_OFF:
             self.kill_left = KILL_REPEATS
-            messages.append('BACK：熄火並鎖定停車（要用 R12 才能恢復）')
+            messages.append('BACK：熄火並鎖定停車（用 R12 或 START 恢復）')
         if events & EV_PARK:
             self._to_joy()
             messages.append('B：停車，回到 JOY（搖桿先回中間才會動）')
@@ -78,6 +78,8 @@ class RemoteLogic:
                 messages.append('RB：切到 JOY（手動），搖桿先回中間才會動')
         if events & EV_UNLOCK:
             messages.append('LB：申請 ARM（解開行走鎖）')
+        if events & EV_ENGINE_ON:
+            messages.append('START：申請解除 ESTOP')
         for bit, name in UNSUPPORTED:
             if events & bit:
                 messages.append(f'{name}：這次測試還不支援，忽略')

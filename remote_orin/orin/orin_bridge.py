@@ -17,7 +17,7 @@ from pathlib import Path
 
 from fake_stm32 import FakeStm32
 from joy_lib import Joy, tools
-from remote_logic import EV_UNLOCK, STATE_NAMES_ZH, RemoteLogic
+from remote_logic import AUTO, ESTOP, EV_ENGINE_ON, EV_UNLOCK, STATE_NAMES_ZH, RemoteLogic
 from motion_authority import MotionAuthority
 
 HERE = Path(__file__).resolve().parent
@@ -25,6 +25,7 @@ STEP = 0.01            # 主迴圈 10 ms 一圈
 COMMAND_PERIOD = 0.05  # 50 ms 送一次命令；STM32 超過 200 ms 沒收到會自己停
 FRESH = 0.15           # STM32 回報超過這個時間沒更新，就當它沒回應
 DISPLAY_PERIOD = 0.2
+CLEAR_CONFIRM = 1.0    # 送出解除 ESTOP 後，這段時間內要看到 STM32 回到 AUTO
 MOWER_LINK_DIRS = [HERE]
 INDICATOR_TEXT = {0: 'ORIN', 1: 'JOY', 2: '等待 AUTO', 3: '異常'}
 
@@ -41,6 +42,7 @@ class Bridge:
         self.authority = MotionAuthority(log)
         self.key_buffer = ''
         self.last_applied = (0.0, 0.0)
+        self.clear_sent = None
 
     def key(self, key):
         # 鍵盤打 ARM 再按 Enter，跟按 LB 一樣（備用）
@@ -61,6 +63,18 @@ class Bridge:
             return None
         return status['state']
 
+    def clear_allowed(self, rc, state):
+        # F710 START 解除 ESTOP：STM32 自己說可以（clear_ready）才送，而且只送一次
+        if state != ESTOP:
+            self.log('START：STM32 沒回應，不能解除' if state is None else 'START：STM32 沒有在 ESTOP，不用解除')
+        elif not rc.sticks_neutral:
+            self.log('START 拒絕：先放開搖桿')
+        elif not self.stm32.status.get('clear_ready', False):
+            self.log('START 拒絕：STM32 還不能解除（故障沒排除、R12 搖桿沒回中、引擎開關不在 HOLD 或編碼器異常）')
+        else:
+            return True
+        return False
+
     def step(self):
         now = self.clock()
         now_ms = int((now - self.start) * 1000)
@@ -76,7 +90,15 @@ class Bridge:
             self.log(message)
         if rc.events & EV_UNLOCK:
             self.authority.request()
+        clear = bool(rc.events & EV_ENGINE_ON) and self.clear_allowed(rc, state)
         status = self.stm32.status
+        if self.clear_sent is not None:
+            if state == AUTO and not status['faults']:
+                self.log('ESTOP 已解除：STM32 回到 AUTO 待命，放開搖桿按 LB 做 ARM')
+                self.clear_sent = None
+            elif now - self.clear_sent > CLEAR_CONFIRM:
+                self.log('ESTOP 解除沒有確認：不自動重送，再按一次 START 或用 R12')
+                self.clear_sent = None
         authority_status = dict(status, _received_at=self.stm32.status_at) if status else None
         was_active = self.authority.active
         arm = self.authority.update(authority_status, state is not None, rc, self.logic.mode,
@@ -91,15 +113,18 @@ class Bridge:
         reply = self.joy.take_reply()
         if reply:
             self.lora.write(reply)
-        if arm or applied.urgent or self.last_command is None or now - self.last_command >= COMMAND_PERIOD:
-            self.send(applied, now, arm=arm)
+        if arm or clear or applied.urgent or self.last_command is None or now - self.last_command >= COMMAND_PERIOD:
+            self.send(applied, now, arm=arm, clear=clear)
         self.display(rc, state, command, now)
         return applied
 
-    def send(self, command, now, arm=False):
+    def send(self, command, now, arm=False, clear=False):
         self.last_command = now
         try:
-            if arm:
+            if clear:
+                self.stm32.command(clear_estop=True)
+                self.clear_sent = now
+            elif arm:
                 self.stm32.command(arm_auto=True)
                 # command() 送完序號會 +1，減回去才是 ARM 那包的序號
                 self.authority.arm_sent((self.stm32.sequence - 1) & 0xffffffff, now)
@@ -224,8 +249,9 @@ def main():
     keys = tools.Keys(preserve_case=True)
     print(f'Orin 端：LoRa {args.lora_port}；{where}')
     print(f'JOY 搖桿推到底 {args.max_rpm:g} RPM；ORIN 測試轉速 {args.auto_rpm:g} RPM。'
-          '按 q 結束（結束時會送 ESTOP，要用 R12 恢復）。')
+          '按 q 結束（結束時會送 ESTOP，用 R12 或 F710 的 START 恢復）。')
     print('行走預設鎖定。R12 進 AUTO、F710 置中後，按 F710 的 LB（或在這裡輸入 ARM 並按 Enter）；失聯後需重新確認。')
+    print('ESTOP 時放開搖桿按 F710 的 START 解除（R12 照樣可以），解除後還要再按 LB 才能開。')
 
     bridge = Bridge(lora, stm32, logic, joy, log, start=start)
     try:
