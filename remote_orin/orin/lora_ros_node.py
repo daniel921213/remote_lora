@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
-"""Receive the existing F710 LoRa protocol and publish ROS 2 topics. No STM32 access.
+"""LoRa 收 F710 → 照 orin_bridge 的按鍵規則 → 發 ROS 2 topic 給組員的 stm_bridge。這支不開 STM32 串口。
 
-Run inside a sourced ROS 2 environment:
-    python3 lora_ros_node.py --lora-port /dev/ttyUSB4
+先跑組員的 main_control 和 stm_bridge，再在 source 過 ROS 2 的終端機執行：
+    python3 lora_ros_node.py --lora-port /dev/lora_remote
 
-Joy axes: [forward, right], normalized -1..1 after the existing deadband.
-Joy buttons are ONE-MESSAGE PRESS EVENTS, not held states: the wire only has counters.
-Slots: START BACK X Y A B RB LB UP DOWN. This node never executes those actions.
+按鍵跟 orin_bridge.py 一樣（共用 remote_logic.py）：
+    搖桿        JOY 模式開車 → joint_command（左右輪 rad/s）
+    RB          切換 JOY / ORIN（ORIN 先用固定測試轉速）→ /remote/mode
+    B           停車，回到 JOY
+    BACK        呼叫 /estop（這條路只會 ESTOP，不會熄火），之後一直送 0 直到按 START
+    START       STM32 在 ESTOP 時呼叫 /release_state 解除；也會解開 BACK 的鎖
+    LB          STM32 在 AUTO 時呼叫 /release_state 申請 ARM（main_control 進 AUTO 也會自己 ARM）
+STM32 狀態從 /stm/state、/stm/connected 收回來。另外照舊發 /remote/joy、/remote/connected、
+/remote/sticks_neutral；/remote/joy 的按鍵是「按一下只出現一筆」，不是按住的狀態。
 """
 
 import argparse
@@ -18,16 +24,13 @@ import time
 from dataclasses import dataclass
 
 from joy_lib import Joy
+from remote_logic import (AUTO, ESTOP, EV_ENGINE_OFF, EV_ENGINE_ON, EV_UNLOCK, IND_FAULT, STATE_NAMES_ZH,
+                          RemoteLogic)
 
 BUTTON_NAMES = ('START', 'BACK', 'X', 'Y', 'A', 'B', 'RB', 'LB', 'UP', 'DOWN')
-LINK_LOST, LINK_RESTORED, OVERFLOW = 1 << 10, 1 << 11, 1 << 12
-
-
-def velocity(sample, max_linear, max_angular):
-    """ROS Twist: forward m/s, left-positive yaw rad/s (wire turn is right-positive)."""
-    if not sample.connected:
-        return 0.0, 0.0
-    return sample.drive * max_linear, -sample.turn * max_angular
+LEFT_JOINT, RIGHT_JOINT = 'left_wheel_joint', 'right_wheel_joint'  # stm_bridge 預設的輪子名稱
+RPM_TO_RAD_S = 2.0 * math.pi / 60.0  # joint_command 用 rad/s，stm_bridge 會再換回 RPM
+DISPLAY_PERIOD = 0.2
 
 
 @dataclass(frozen=True)
@@ -40,46 +43,104 @@ class Sample:
     events: int = 0
 
 
-class Receiver:
-    """Hardware protocol pump; separate from ROS so real C decoding can be tested offline."""
+class Remote:
+    """每叫一次 step()：收 LoRa、算 JOY/ORIN、回手把，要發的東西交給 out（ROS 節點，測試時換成假的）。"""
 
-    def __init__(self, port, joy, publish, publish_hz=20.0, clock=time.monotonic):
+    def __init__(self, port, joy, logic, out, publish_hz=20.0, clock=time.monotonic):
         if not math.isfinite(publish_hz) or not 5 <= publish_hz <= 100:
             raise ValueError('publish_hz must be within 5..100')
-        self.port, self.joy, self.publish, self.clock = port, joy, publish, clock
+        self.port, self.joy, self.logic, self.out, self.clock = port, joy, logic, out, clock
         self.period = 1.0 / publish_hz
         self.start = clock()
+        self.state = None   # STM32 狀態；None＝stm_bridge 沒在跑或它沒連上 STM32
+        self.held = False   # 按過 BACK：START/LB 之前一律送 0，就算 /estop 沒成功也一樣
         self.published_at = None
         self.last_connected = None
+        self.last_mode = None
+        self.shown, self.shown_at = None, None
         self.closed = False
 
     def step(self):
         if self.closed:
-            return
+            return None
         now = self.clock()
         now_ms = int((now - self.start) * 1000)
         self.joy.feed(self.port.read(min(self.port.in_waiting or 1, 4096)), now_ms)
         rc = self.joy.poll(now_ms)
-        connected = bool(rc.link_ok)
-        # Acknowledge LoRa reception, without inventing STM32 state or a driving grant.
-        # 2 = released/waiting, 3 = fault; state 0 = unknown/unconfigured.
-        self.joy.set_status(2 if connected else 3, 0)
+        events = int(rc.events)
+        command = self.logic.step(rc, self.state)
+        for message in command.messages:
+            if not message.startswith('BACK'):  # BACK 在這條路只有 ESTOP，下面自己印
+                self.out.log(message)
+
+        if events & EV_ENGINE_OFF:
+            self.held = True
+            self.out.log('BACK：停車，呼叫 /estop 鎖住（這條路不會熄火；用 START 解除）')
+            self.out.estop()
+        # START 和 LB 都是叫 /release_state，先看 STM32 狀態，按錯鍵就不送
+        if events & EV_ENGINE_ON:
+            if not rc.sticks_neutral:
+                self.out.log('START 拒絕：先放開搖桿')
+            else:
+                if self.held:
+                    self.held = False
+                    self.out.log('START：解除 BACK 的停車鎖')
+                if self.state == ESTOP:
+                    self.out.log('START：呼叫 /release_state 解除 ESTOP')
+                    self.out.release()
+                else:
+                    self.out.log('START：STM32 沒回應，不能解除' if self.state is None
+                                 else 'START：STM32 沒有在 ESTOP，不用解除')
+        if events & EV_UNLOCK:
+            if not rc.sticks_neutral:
+                self.out.log('LB 拒絕：先放開搖桿')
+            elif self.state != AUTO:
+                self.out.log('LB：STM32 沒回應，不能 ARM' if self.state is None
+                             else 'LB：STM32 不在 AUTO，不能 ARM')
+            elif self.held:
+                self.out.log('LB 拒絕：BACK 鎖住中，先按 START')
+            else:
+                self.out.log('LB：呼叫 /release_state 申請 ARM')
+                self.out.release()
+
+        left, right, indicator = command.left, command.right, command.indicator
+        if self.held:
+            left = right = 0.0
+            indicator = IND_FAULT
+        # 回手把（F710 會依狀態震動）
+        self.joy.set_status(indicator, 0 if self.state is None else self.state)
         reply = self.joy.take_reply()
         if reply and self.port.write(reply) != len(reply):
             raise ConnectionError('Incomplete LoRa acknowledgement write')
-        events = int(rc.events)
-        sample = Sample(connected, bool(rc.sticks_neutral) if connected else False,
-                        float(rc.drive) if connected else 0.0,
-                        float(rc.turn) if connected else 0.0,
-                        tuple(int(connected and bool(events & (1 << i)))
-                              for i in range(len(BUTTON_NAMES))), events)
-        # Button presses and disconnection are published immediately, not lost between timers.
-        if (self.published_at is None or now - self.published_at >= self.period
-                or connected != self.last_connected or events):
-            self.publish(sample)
+
+        # 平常 20 Hz 發一次；要停車、有按鍵、連線狀態變了就馬上發
+        connected = bool(rc.link_ok)
+        if (command.urgent or events or connected != self.last_connected
+                or self.published_at is None or now - self.published_at >= self.period):
+            self.out.wheels(left, right)
+            self.out.sample(Sample(connected, bool(rc.sticks_neutral) if connected else False,
+                                   float(rc.drive) if connected else 0.0,
+                                   float(rc.turn) if connected else 0.0,
+                                   tuple(int(connected and bool(events & (1 << i)))
+                                         for i in range(len(BUTTON_NAMES))), events))
+            self.logic.sent()
             self.published_at = now
         self.last_connected = connected
-        return sample
+        if self.logic.mode != self.last_mode:
+            self.out.mode(self.logic.mode)
+            self.last_mode = self.logic.mode
+        self.display(rc, left, right, now)
+        return command
+
+    def display(self, rc, left, right, now):
+        key = (self.logic.mode, bool(rc.link_ok), left, right, self.state, self.held)
+        if key == self.shown or (self.shown_at is not None and now - self.shown_at < DISPLAY_PERIOD):
+            return
+        stm32 = '沒回應' if self.state is None else STATE_NAMES_ZH.get(self.state, self.state)
+        self.out.log(f'模式 {self.logic.mode}｜遙控 {"正常" if rc.link_ok else "失聯"}｜'
+                     f'送出 左 {left:+.1f} 右 {right:+.1f} RPM｜STM32 {stm32}'
+                     + ('｜BACK 鎖住中，按 START 解除' if self.held else ''))
+        self.shown, self.shown_at = key, now
 
     def close(self, publish=True):
         if self.closed:
@@ -87,7 +148,8 @@ class Receiver:
         self.closed = True
         try:
             if publish:
-                self.publish(Sample(False, False, 0.0, 0.0, (0,) * len(BUTTON_NAMES)))
+                self.out.wheels(0.0, 0.0)
+                self.out.sample(Sample(False, False, 0.0, 0.0, (0,) * len(BUTTON_NAMES)))
         finally:
             try:
                 self.joy.close()
@@ -118,25 +180,28 @@ def open_lora(name):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--lora-port', required=True)
-    parser.add_argument('--publish-hz', type=float, default=20.0)
-    parser.add_argument('--max-linear', type=float, default=0.3, help='Full-forward speed in m/s (default 0.3)')
-    parser.add_argument('--max-angular', type=float, default=1.0, help='Full-turn speed in rad/s (default 1.0)')
+    parser = argparse.ArgumentParser(description='LoRa 收 F710，發 joint_command 和 /estop、/release_state 給 stm_bridge')
+    parser.add_argument('--lora-port', required=True, help='LoRa 模組的串口，例如 /dev/lora_remote')
+    parser.add_argument('--publish-hz', type=float, default=20.0, help='joint_command 發送頻率，預設 20')
+    parser.add_argument('--max-rpm', type=float, default=10.0, help='JOY 搖桿推到底的轉速，預設 10，最大 40')
+    parser.add_argument('--auto-rpm', type=float, default=5.0,
+                        help='ORIN 模式的測試轉速（左右相同、往前），預設 5；0 表示原地不動')
     args, ros_args = parser.parse_known_args(argv)
     if not math.isfinite(args.publish_hz) or not 5 <= args.publish_hz <= 100:
         parser.error('--publish-hz must be within 5..100')
-    if not all(math.isfinite(value) and value > 0 for value in (args.max_linear, args.max_angular)):
-        parser.error('--max-linear and --max-angular must be finite and positive')
+    try:
+        logic = RemoteLogic(args.max_rpm, args.auto_rpm)
+    except ValueError as error:
+        parser.error(str(error))
     try:
         import rclpy
         from rclpy.clock import Clock, ClockType
         from rclpy.executors import ExternalShutdownException
         from rclpy.node import Node
         from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
-        from sensor_msgs.msg import Joy as JoyMessage
-        from geometry_msgs.msg import Twist
-        from std_msgs.msg import Bool
+        from sensor_msgs.msg import Joy as JoyMessage, JointState
+        from std_msgs.msg import Bool, String, UInt8
+        from std_srvs.srv import Trigger
     except ImportError as error:
         parser.exit(1, 'ROS 2 environment is missing: %s\nSource ROS 2 setup.bash first.\n' % error)
 
@@ -146,22 +211,46 @@ def main(argv=None):
             qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
                              reliability=ReliabilityPolicy.RELIABLE,
                              durability=DurabilityPolicy.VOLATILE)
+            # 跟 stm_bridge 的 /stm/* 一樣：晚開的程式也拿得到最後一筆
+            latched = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1,
+                                 reliability=ReliabilityPolicy.RELIABLE,
+                                 durability=DurabilityPolicy.TRANSIENT_LOCAL)
+            self.wheels_pub = self.create_publisher(JointState, 'joint_command', 10)
             self.joy_pub = self.create_publisher(JoyMessage, '/remote/joy', qos)
-            self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', qos)
             self.connected_pub = self.create_publisher(Bool, '/remote/connected', qos)
             self.neutral_pub = self.create_publisher(Bool, '/remote/sticks_neutral', qos)
-            self.previous_connected = None
+            self.mode_pub = self.create_publisher(String, '/remote/mode', latched)
+            self.estop_client = self.create_client(Trigger, '/estop')
+            self.release_client = self.create_client(Trigger, '/release_state')
+            self.stm_state = None
+            self.stm_connected = False
+            self.stm_alive = None
+            self.other_wheel_publishers = 0
             self.failure = None
-            self.receiver = Receiver(port, Joy(), self.publish_sample, args.publish_hz)
-            # Link timeouts must keep working even if /clock or simulated time stops.
-            self.timer = self.create_timer(0.01, self.tick, clock=Clock(clock_type=ClockType.STEADY_TIME))
-            self.get_logger().info('LoRa %s -> /remote/joy; STM32 serial is NOT opened' % args.lora_port)
-            self.get_logger().info('/cmd_vel enabled: max linear %.3f m/s, max angular %.3f rad/s'
-                                   % (args.max_linear, args.max_angular))
-            self.get_logger().info('axes=[forward,right]; buttons=[%s] are press pulses, not holds'
-                                   % ','.join(BUTTON_NAMES))
+            self.remote = Remote(port, Joy(), logic, self, args.publish_hz)
+            self.create_subscription(UInt8, '/stm/state', self.on_stm_state, latched)
+            self.create_subscription(Bool, '/stm/connected', self.on_stm_connected, latched)
+            # 計時用系統時鐘，ROS 的 /clock 停了也照跑
+            steady = Clock(clock_type=ClockType.STEADY_TIME)
+            self.timer = self.create_timer(0.01, self.tick, clock=steady)
+            self.peer_timer = self.create_timer(1.0, self.check_peers, clock=steady)
+            self.log(f'LoRa {args.lora_port} → joint_command；STM32 串口不在這支開')
+            self.log(f'JOY 搖桿推到底 {args.max_rpm:g} RPM；ORIN 測試轉速 {args.auto_rpm:g} RPM')
+            self.log('R12 進 AUTO 後 main_control 會自動 ARM（也可按 LB）；BACK 鎖住後按 START 解除')
+            self.check_peers()
 
-        def publish_sample(self, sample):
+        # ---- Remote 叫的這幾個：真的發 topic、叫 service ----
+        def log(self, text):
+            self.get_logger().info(text)
+
+        def wheels(self, left, right):
+            message = JointState()
+            message.header.stamp = self.get_clock().now().to_msg()
+            message.name = [LEFT_JOINT, RIGHT_JOINT]
+            message.velocity = [left * RPM_TO_RAD_S, right * RPM_TO_RAD_S]
+            self.wheels_pub.publish(message)
+
+        def sample(self, sample):
             self.connected_pub.publish(Bool(data=sample.connected))
             self.neutral_pub.publish(Bool(data=sample.neutral))
             message = JoyMessage()
@@ -170,26 +259,71 @@ def main(argv=None):
             message.axes = [sample.drive, sample.turn]
             message.buttons = list(sample.buttons)
             self.joy_pub.publish(message)
-            twist = Twist()
-            twist.linear.x, twist.angular.z = velocity(sample, args.max_linear, args.max_angular)
-            self.cmd_vel_pub.publish(twist)
-            if sample.connected != self.previous_connected:
-                self.get_logger().info('Remote connected' if sample.connected else 'Remote lost: publishing zeros')
-                self.previous_connected = sample.connected
-            pressed = [name for name, value in zip(BUTTON_NAMES, sample.buttons) if value]
-            if pressed:
-                self.get_logger().info('Press: ' + ', '.join(pressed))
-            if sample.events & OVERFLOW:
-                self.get_logger().warning('LoRa input overflow: some button events may have been merged')
+
+        def mode(self, mode):
+            self.mode_pub.publish(String(data=mode))
+
+        def estop(self):
+            self.call(self.estop_client, '/estop')
+
+        def release(self):
+            self.call(self.release_client, '/release_state')
+
+        def call(self, client, name):
+            if not client.service_is_ready():
+                self.get_logger().error(f'{name} 叫不到：stm_bridge 沒在跑？')
+                return
+            future = client.call_async(Trigger.Request())
+            future.add_done_callback(lambda done: self.on_reply(name, done))
+
+        def on_reply(self, name, done):
+            try:
+                result = done.result()
+            except Exception as error:
+                self.get_logger().error(f'{name} 失敗：{error}')
+                return
+            if result.success:
+                self.get_logger().info(f'{name} 成功：{result.message}')
+            else:
+                self.get_logger().warning(f'{name} 被拒絕：{result.message}')
+
+        # ---- STM32 狀態 ----
+        def on_stm_state(self, message):
+            self.stm_state = int(message.data)
+            self.update_state()
+
+        def on_stm_connected(self, message):
+            self.stm_connected = bool(message.data)
+            self.update_state()
+
+        def update_state(self):
+            self.remote.state = self.stm_state if self.stm_alive and self.stm_connected else None
+
+        def check_peers(self):
+            # 每秒看一次：stm_bridge 還在不在、有沒有別的程式也在發 joint_command
+            alive = self.count_publishers('/stm/state') > 0
+            if alive != self.stm_alive:
+                if alive:
+                    self.get_logger().info('stm_bridge 在線')
+                else:
+                    self.get_logger().warning('找不到 stm_bridge（沒人發 /stm/state）：車子不會動')
+                self.stm_alive = alive
+                self.update_state()
+            others = self.count_publishers('joint_command') - 1
+            if others != self.other_wheel_publishers:
+                if others > 0:
+                    self.get_logger().warning(f'還有 {others} 個程式也在發 joint_command（例如 diff_controller），'
+                                              '它們送速度時會跟遙控器打架')
+                self.other_wheel_publishers = others
 
         def tick(self):
             try:
-                self.receiver.step()
+                self.remote.step()
             except Exception as error:
                 self.failure = error
                 self.timer.cancel()
-                self.get_logger().error('LoRa read/write failed: %s' % error)
-                self.receiver.close(publish=rclpy.ok())
+                self.get_logger().error(f'LoRa 讀寫失敗：{error}')
+                self.remote.close(publish=rclpy.ok())
 
     rclpy.init(args=ros_args)
     node, port = None, None
@@ -210,7 +344,7 @@ def main(argv=None):
         if node is not None:
             try:
                 node.timer.cancel()
-                node.receiver.close(publish=rclpy.ok())
+                node.remote.close(publish=rclpy.ok())
             finally:
                 node.destroy_node()
         elif port is not None:
