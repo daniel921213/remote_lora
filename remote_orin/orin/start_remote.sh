@@ -3,6 +3,7 @@
 #
 #   ./start_remote.sh            真車：STM32 /dev/stm32（沒有就用 /dev/ttyACM0）、LoRa /dev/lora_gs
 #   ./start_remote.sh --fake     不接車：假 STM32、ROS_DOMAIN_ID=77、TCP 8790，碰不到正在用的系統
+#   ./start_remote.sh --stop     上次沒關乾淨：關掉留下來的程式，把組員的 gs 服務開回來
 #   其他選項：--lora-port 路徑  --stm-port 路徑  --max-rpm N  --auto-rpm N
 #
 # 用 /dev/lora_gs 時會先停掉組員的 fucking-mower-lora-gs 服務（要 sudo），結束時自動開回來。
@@ -18,6 +19,7 @@ GS_SERVICE=fucking-mower-lora-gs.service
 FAKE_LINK=/tmp/fake-stm32
 
 FAKE=0
+STOP=0
 LORA=/dev/lora_gs
 STM=
 NODE_ARGS=()
@@ -27,7 +29,8 @@ while [ $# -gt 0 ]; do
         --lora-port) LORA=$2; shift ;;
         --stm-port) STM=$2; shift ;;
         --max-rpm|--auto-rpm) NODE_ARGS+=("$1" "$2"); shift ;;
-        -h|--help) sed -n '2,10s/^# \{0,1\}//p' "$0"; exit 0 ;;
+        --stop) STOP=1 ;;
+        -h|--help) sed -n '2,11s/^# \{0,1\}//p' "$0"; exit 0 ;;
         *) echo "不認得的選項：$1（-h 看用法）"; exit 2 ;;
     esac
     shift
@@ -71,12 +74,17 @@ stop_one() {
     kill -KILL "$pid"
 }
 
+start_gs() {  # 剛輸入過 sudo 密碼就不用再問（終端機斷了也開得回來）
+    sudo -n systemctl start $GS_SERVICE 2> /dev/null || sudo systemctl start $GS_SERVICE
+}
+
 cleanup() {
     [ -n "$CLEANING" ] && return
     CLEANING=1
+    trap '' INT TERM HUP  # 關到一半再按 Ctrl+C 或斷線，也要關完
     if [ ${#PIDS[@]} -gt 0 ]; then
         echo
-        echo "關閉中…"
+        echo "關閉中…（不用再按，等它關完）"
         # 反過來關：node 先送 0 → bridge → main 送最後的 0 給 STM32 → 假 STM32
         for (( i=${#PIDS[@]}-1; i>=0; i-- )); do
             stop_one "${PIDS[$i]}" "${NAMES[$i]}"
@@ -84,7 +92,7 @@ cleanup() {
     fi
     if [ $GS_STOPPED = 1 ]; then
         echo "把組員的 $GS_SERVICE 開回來…"
-        if sudo systemctl start $GS_SERVICE; then
+        if start_gs; then
             echo "✓ 已開回來"
         else
             echo "✗ 開不回來，請手動執行：sudo systemctl start $GS_SERVICE"
@@ -130,14 +138,48 @@ start() {  # 名稱 資料夾 指令…：輸出加上 [名稱] 印在畫面，�
     NAMES+=("$name")
 }
 
+# 這支開的程式，指令要從頭完全對上（編輯器、grep、組員平常不加 -B -u 開的都不算），照關閉順序排
+OURS=('^python3 -B -u lora_ros_node\.py' '^python3 -B -u -m ros2_stm_connect\.stm_bridge'
+      '^python3 -B -u -m main_control' '^python3 -B -u pty_fake_stm32\.py')
+
+ours_running() {
+    local pattern
+    for pattern in "${OURS[@]}"; do pgrep -f "$pattern"; done | xargs
+}
+
+stop_leftovers() {
+    local pattern pid found=
+    for pattern in "${OURS[@]}"; do
+        for pid in $(pgrep -f "$pattern"); do
+            [ -z "$found" ] && echo "關掉上次留下來的程式：" && found=1
+            ps -o pid=,args= -p "$pid"
+            stop_one "$pid" "$pid"
+        done
+    done
+    [ -z "$found" ] && echo "沒有留下來的程式"
+    [ -L "$FAKE_LINK" ] && rm -f "$FAKE_LINK"
+    if systemctl is-enabled --quiet $GS_SERVICE 2> /dev/null && ! systemctl is-active --quiet $GS_SERVICE; then
+        echo "組員的 $GS_SERVICE 沒在跑，開回來："
+        start_gs && echo "✓ 已開回來"
+    fi
+}
+
+if [ $STOP = 1 ]; then
+    stop_leftovers
+    exit 0
+fi
+
 # ---- 開之前先檢查 ----
 [ -d "$MOWER/main_control" ] || fail "找不到組員的 main_control：$MOWER/main_control"
 [ -d "$BRIDGE_DIR" ] || fail "找不到 stm_bridge：$BRIDGE_DIR"
 [ -e "$LORA" ] || fail "找不到 LoRa：$LORA（USB 有插嗎？）"
-pgrep -f lora_ros_node.py > /dev/null && fail "lora_ros_node 已經在跑，先關掉"
-port_busy $TCP && fail "TCP $TCP 已經有人在用：main_control 是不是已經在跑？"
+running=$(ours_running)
+[ -n "$running" ] && fail "上次沒關乾淨，還有這些在跑：
+$(ps -o pid=,args= -p "${running// /,}")
+先執行：./start_remote.sh --stop"
+port_busy $TCP && fail "TCP $TCP 已經有人在用（組員的 main_control 在跑？）：
+$(ss -ltnp "( sport = :$TCP )" | tail -n +2)"
 if [ $FAKE = 1 ]; then
-    pgrep -f pty_fake_stm32.py > /dev/null && fail "假 STM32 已經在跑，先關掉"
     [ -L "$FAKE_LINK" ] && rm -f "$FAKE_LINK"  # 上次沒關乾淨留下的
 else
     [ -e "$STM" ] || fail "找不到 STM32：$STM（USB 有插嗎？）"
