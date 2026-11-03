@@ -2,6 +2,7 @@
 
   python handheld_pc.py --port COM7           F710 on this laptop (switch on the back set to X)
   python handheld_pc.py --port COM7 --demo    scripted presses, no F710 needed
+  python handheld_pc.py --port socket://127.0.0.1:8789    LoRa shared with the HMI (lora_mux.py laptop)
 
 Runs the same C handheld logic as the Feather RP2040 (common/rc_handheld.c), so a test here
 also tests the future MCU program. The F710 rumbles when the Orin reports a new state.
@@ -134,7 +135,8 @@ class Session:
                 self.emit(f'送出 前後 {drive:+d}、轉向 {turn:+d}' if connected else '送出 手把斷線（gamepad_ok=0）')
                 self.shown_send = (connected, drive, turn)
 
-        self.handheld.feed(self.port.read(self.port.in_waiting or 1), now_ms)
+        # timeout=0: whatever has arrived. A socket:// port reports in_waiting only as 0 or 1.
+        self.handheld.feed(self.port.read(4096), now_ms)
         events = self.handheld.poll(now_ms)
         replies_before = self.info.replies
         info = self.info = self.handheld.info()
@@ -175,13 +177,16 @@ def run(gamepad, key, port):
             time.sleep(max(0.0, SAMPLE_PERIOD - (time.monotonic() - began)))
     except KeyboardInterrupt:
         pass
+    except OSError as error:  # pyserial's SerialException: adapter unplugged, or lora_mux.py closed
+        print(f'✗ LoRa 讀寫失敗：{error}', flush=True)
     finally:
         session.close()
 
 
 def main():
     parser = argparse.ArgumentParser(description='筆電假裝手把 MCU：F710 → LoRa → Orin')
-    parser.add_argument('--port', required=True, help='手把那顆 LoRa 模組的 COM，例如 COM7')
+    parser.add_argument('--port', required=True,
+                        help='手把那顆 LoRa 模組的 COM（例如 COM7），或分流程式 socket://127.0.0.1:8789')
     parser.add_argument('--demo', action='store_true', help='不接 F710，自動跑一段示範操作')
     parser.add_argument('--pad', type=int, default=0, help='XInput 手把編號 0～3')
     args = parser.parse_args()

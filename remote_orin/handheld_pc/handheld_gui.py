@@ -180,7 +180,8 @@ class Panel:
 
 def main():
     parser = argparse.ArgumentParser(description='遙控器測試面板：筆電假裝手把 MCU，用視窗顯示狀態')
-    parser.add_argument('--port', required=True, help='手把那顆 LoRa 模組的 COM，例如 COM7')
+    parser.add_argument('--port', required=True,
+                        help='手把那顆 LoRa 模組的 COM（例如 COM7），或分流程式 socket://127.0.0.1:8789')
     parser.add_argument('--demo', action='store_true', help='不接 F710，自動跑一段示範操作')
     parser.add_argument('--pad', type=int, default=0, help='XInput 手把編號 0～3')
     args = parser.parse_args()

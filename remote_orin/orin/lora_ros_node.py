@@ -2,7 +2,8 @@
 """LoRa 收 F710 → 照 orin_bridge 的按鍵規則 → 發 ROS 2 topic 給組員的 stm_bridge。這支不開 STM32 串口。
 
 先跑組員的 main_control 和 stm_bridge，再在 source 過 ROS 2 的終端機執行：
-    python3 lora_ros_node.py --lora-port /dev/lora_remote
+    python3 lora_ros_node.py --lora-port socket://127.0.0.1:8789   跟地面站共用 LoRa（先開 lora_mux.py orin）
+    python3 lora_ros_node.py --lora-port /dev/lora_gs              自己獨占 LoRa
 
 按鍵跟 orin_bridge.py 一樣（共用 remote_logic.py）：
     搖桿        JOY 模式開車 → joint_command（左右輪 rad/s）
@@ -65,7 +66,8 @@ class Remote:
             return None
         now = self.clock()
         now_ms = int((now - self.start) * 1000)
-        self.joy.feed(self.port.read(min(self.port.in_waiting or 1, 4096)), now_ms)
+        # timeout=0: whatever has arrived. A socket:// port reports in_waiting only as 0 or 1.
+        self.joy.feed(self.port.read(4096), now_ms)
         rc = self.joy.poll(now_ms)
         events = int(rc.events)
         command = self.logic.step(rc, self.state)
@@ -158,8 +160,11 @@ class Remote:
 
 
 def open_lora(name):
-    """Only the requested LoRa port is opened. Never import or instantiate MowerLink."""
+    """Only the requested LoRa port is opened. Never import or instantiate MowerLink.
+    A socket:// name is lora_mux.py's remote port: the LoRa shared with the ground station."""
     import serial
+    if '://' in name:
+        return serial.serial_for_url(name, timeout=0, write_timeout=0.1)
     if os.name == 'posix':
         owner = subprocess.run(['fuser', os.path.realpath(name)], capture_output=True, text=True)
         if owner.returncode == 0:
@@ -181,7 +186,8 @@ def open_lora(name):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description='LoRa 收 F710，發 joint_command 和 /estop、/release_state 給 stm_bridge')
-    parser.add_argument('--lora-port', required=True, help='LoRa 模組的串口，例如 /dev/lora_remote')
+    parser.add_argument('--lora-port', required=True,
+                        help='LoRa 模組的串口（例如 /dev/lora_gs），或分流程式 socket://127.0.0.1:8789')
     parser.add_argument('--publish-hz', type=float, default=20.0, help='joint_command 發送頻率，預設 20')
     parser.add_argument('--max-rpm', type=float, default=10.0, help='JOY 搖桿推到底的轉速，預設 10，最大 40')
     parser.add_argument('--auto-rpm', type=float, default=5.0,
@@ -322,7 +328,8 @@ def main(argv=None):
             except Exception as error:
                 self.failure = error
                 self.timer.cancel()
-                self.get_logger().error(f'LoRa 讀寫失敗：{error}')
+                hint = '（分流程式關掉了？）' if '://' in args.lora_port else ''
+                self.get_logger().error(f'LoRa 讀寫失敗{hint}：{error}')
                 self.remote.close(publish=rclpy.ok())
 
     rclpy.init(args=ros_args)

@@ -32,11 +32,17 @@ def load_library(name, sources, out_dir):
 
 
 def open_serial(name):
-    """Opens a serial port at 115200 8N1 without touching DTR/RTS, non-blocking reads."""
+    """Opens a serial port at 115200 8N1 without touching DTR/RTS, non-blocking reads.
+    A socket:// name is lora_mux.py's remote port: the LoRa shared with the ground station."""
     try:
         import serial
     except ImportError:
         sys.exit('需要 pyserial：pip install pyserial')
+    if '://' in name:
+        try:
+            return serial.serial_for_url(name, BAUD, timeout=0)
+        except serial.SerialException as error:
+            sys.exit(f'連不上 {name}：{error}\n（分流程式 lora_mux.py 有開嗎？）')
     port = serial.Serial()
     port.port, port.baudrate, port.timeout = name, BAUD, 0
     port.dtr = port.rts = False  # do not drive DTR/RTS; they can hold a module in reset
