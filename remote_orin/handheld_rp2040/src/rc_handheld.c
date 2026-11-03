@@ -139,10 +139,24 @@ size_t rc_hh_take_line(RcHandheld *h, uint32_t now_ms, char *out, size_t cap) {
     return pos;
 }
 
+#define LINE_START "AT+SEND="
+#define LINE_START_LEN 8u
+
 void rc_hh_feed(RcHandheld *h, const uint8_t *data, size_t len, uint32_t now_ms) {
     for (size_t i = 0; i < len; i++) {
         char c = (char)data[i];
-        if (c == '\n') {
+        /* A reply starts at "AT+SEND=" wherever it shows up. On a shared channel other radios'
+         * packets arrive too, often binary without '\n': everything before the start is dropped. */
+        h->start_seen = c == LINE_START[h->start_seen] ? (uint8_t)(h->start_seen + 1u)
+                                                       : (uint8_t)(c == LINE_START[0]);
+        if (h->start_seen == LINE_START_LEN) {
+            memcpy(h->line, LINE_START, LINE_START_LEN);
+            h->line_len = LINE_START_LEN;
+            h->discarding = false;
+            h->start_seen = 0;
+        } else if (h->line_len == 0) {
+            continue; /* between lines */
+        } else if (c == '\n') {
             size_t n = h->line_len;
             if (!h->discarding) {
                 if (n && h->line[n - 1] == '\r') n--;

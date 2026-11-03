@@ -115,6 +115,7 @@ static void test_replies_and_rumble(void) {
     rc_hh_feed(&h, (const uint8_t *)"+OK\r\n+READY\r\n", 13, 3600);
     char junk[RC_HH_LINE_MAX + 10];
     memset(junk, 'Z', sizeof junk);
+    memcpy(junk, "AT+SEND=", 8);
     rc_hh_feed(&h, (const uint8_t *)junk, sizeof junk, 3600);
     rc_hh_feed(&h, (const uint8_t *)"\n", 1, 3600);
     CHECK(rc_hh_poll(&h, 3600) == 0 && h.indicator == JOY_IND_FAULT && h.replies == 4);
@@ -123,6 +124,32 @@ static void test_replies_and_rumble(void) {
     n = reply_line(RC_HH_ADDRESS, JOY_IND_RELEASED, 1, line);
     for (size_t i = 0; i < n; i++) rc_hh_feed(&h, (const uint8_t *)line + i, 1, 3700);
     CHECK(rc_hh_poll(&h, 3700) == RC_HH_EV_INDICATOR && h.indicator == JOY_IND_RELEASED && h.state == 1);
+}
+
+/* Shared channel: the Orin's and the ground station's LoRa2 frames (start 0xA5, binary,
+ * usually no '\n') land right before replies with no newline in between. */
+static void test_foreign_bytes(void) {
+    RcHandheld h;
+    char line[64];
+    rc_hh_init(&h, 0);
+    static const uint8_t frame[] = {0xa5, 0x01, 0x02, 0x01, 0x02, 0x07, 0x01, 0x00,
+                                    0x00, 0x00, '\r', 'A', 'T', '+'}; /* ends like a start */
+    size_t n = reply_line(RC_HH_ADDRESS, JOY_IND_JOY, 3, line);
+    rc_hh_feed(&h, frame, sizeof frame, 100);
+    rc_hh_feed(&h, (const uint8_t *)line, n, 100);
+    CHECK(rc_hh_poll(&h, 100) == RC_HH_EV_LINK_UP && h.replies == 1);
+
+    uint8_t noise[3 * RC_HH_LINE_MAX]; /* longer than any line, no newline */
+    for (size_t i = 0; i < sizeof noise; i++) noise[i] = (uint8_t)(0xa5u + 7u * i);
+    rc_hh_feed(&h, noise, sizeof noise, 200);
+    rc_hh_feed(&h, (const uint8_t *)line, n, 200);
+    CHECK(h.replies == 2);
+
+    /* A reply cut short (the rest of its packet was lost), then a whole one. */
+    n = reply_line(RC_HH_ADDRESS, JOY_IND_ORIN, 3, line);
+    rc_hh_feed(&h, (const uint8_t *)line, 20, 300);
+    rc_hh_feed(&h, (const uint8_t *)line, n, 300);
+    CHECK(rc_hh_poll(&h, 300) == RC_HH_EV_INDICATOR && h.indicator == JOY_IND_ORIN && h.replies == 3);
 }
 
 static void test_link_loss(void) {
@@ -179,6 +206,7 @@ int main(void) {
     test_frames();
     test_sampling();
     test_replies_and_rumble();
+    test_foreign_bytes();
     test_link_loss();
     test_round_trip();
     printf("%d checks, %d failed\n", checks, failures);

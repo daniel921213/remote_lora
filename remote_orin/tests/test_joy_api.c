@@ -303,6 +303,7 @@ static void test_line_handling(void) {
 
     char junk[JOY_LINE_MAX + 20];
     memset(junk, 'Z', sizeof junk);
+    memcpy(junk, "+RCV=", 5); /* our line, too long: data was lost */
     joy_api_feed(&j, (const uint8_t *)junk, sizeof junk, 20);
     joy_api_feed(&j, (const uint8_t *)"\r\n", 2, 20);
     CHECK(poll(&j, 20).events == JOY_EV_OVERFLOW);
@@ -312,6 +313,43 @@ static void test_line_handling(void) {
 
     joy_api_report_overflow(&j);
     CHECK(poll(&j, 40).events == JOY_EV_OVERFLOW);
+}
+
+/* Shared channel: the ground station's LoRa2 frames (start 0xA5, binary, usually no '\n')
+ * land right before our lines with no newline in between. */
+static void test_foreign_bytes(void) {
+    JoyApi j;
+    joy_api_init(&j, &CONFIG);
+    char line[96];
+    RcInput in = input(1);
+    static const uint8_t frame[] = {0xa5, 0x01, 0x02, 0x05, 0x05, 0x07, 0x01, 0x00,
+                                    0x00, 0x00, 0x00, 0x00, '\r', 0x00, 0x00, '+', 'R'}; /* ends like a start */
+    size_t n = rcv_line(&in, CONFIG.peer_address, line);
+    joy_api_feed(&j, frame, sizeof frame, 0);
+    joy_api_feed(&j, (const uint8_t *)line, n, 0);
+    CHECK(poll(&j, 0).events == JOY_EV_LINK_RESTORED);
+    CHECK(joy_api_take_reply(&j, line, JOY_REPLY_MAX) > 0);
+
+    /* Longer than any line and no newline: ignored, and not reported as lost data. */
+    uint8_t noise[3 * JOY_LINE_MAX];
+    for (size_t i = 0; i < sizeof noise; i++) noise[i] = (uint8_t)(0xa5u + 7u * i);
+    in.seq = 2;
+    rc_input_count_press(&in, RC_BTN_START);
+    n = rcv_line(&in, CONFIG.peer_address, line);
+    joy_api_feed(&j, noise, sizeof noise, 10);
+    joy_api_feed(&j, (const uint8_t *)line, n, 10);
+    CHECK(poll(&j, 10).events == JOY_EV_ENGINE_ON);
+
+    /* A line cut short (the rest of its packet was lost), then a whole one: the whole one counts. */
+    in.seq = 3;
+    rc_input_count_press(&in, RC_BTN_RB);
+    n = rcv_line(&in, CONFIG.peer_address, line);
+    joy_api_feed(&j, (const uint8_t *)line, 30, 20);
+    in.seq = 4;
+    n = rcv_line(&in, CONFIG.peer_address, line);
+    joy_api_feed(&j, (const uint8_t *)line, n, 20);
+    JoyOutput out = poll(&j, 20);
+    CHECK(out.link_ok && out.events == JOY_EV_CONTROL_TOGGLE);
 }
 
 static void test_deadband_and_signs(void) {
@@ -342,6 +380,7 @@ int main(void) {
     test_gamepad_lost();
     test_reply();
     test_line_handling();
+    test_foreign_bytes();
     test_deadband_and_signs();
     printf("%d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;

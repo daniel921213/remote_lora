@@ -88,11 +88,25 @@ bool joy_api_init(JoyApi *j, const JoyConfig *cfg) {
     return true;
 }
 
+#define LINE_START "+RCV="
+#define LINE_START_LEN 5u
+
 void joy_api_feed(JoyApi *j, const uint8_t *data, size_t len, uint32_t now_ms) {
     if (!j->ready) return;
     for (size_t i = 0; i < len; i++) {
         char c = (char)data[i];
-        if (c == '\n') {
+        /* A line starts at "+RCV=" wherever it shows up. On a shared channel other radios'
+         * packets arrive too, often binary without '\n': everything before the start is dropped. */
+        j->start_seen = c == LINE_START[j->start_seen] ? (uint8_t)(j->start_seen + 1u)
+                                                       : (uint8_t)(c == LINE_START[0]);
+        if (j->start_seen == LINE_START_LEN) {
+            memcpy(j->line, LINE_START, LINE_START_LEN);
+            j->line_len = LINE_START_LEN;
+            j->discarding = false;
+            j->start_seen = 0;
+        } else if (j->line_len == 0) {
+            continue; /* between lines */
+        } else if (c == '\n') {
             size_t n = j->line_len;
             if (!j->discarding) {
                 if (n && j->line[n - 1] == '\r') n--;

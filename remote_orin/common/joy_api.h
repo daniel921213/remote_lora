@@ -7,7 +7,7 @@
 #define JOY_API_H
 #include "rc_proto.h"
 
-#define JOY_LINE_MAX 80u  /* longest RYLR998 line kept; longer lines raise JOY_EV_OVERFLOW */
+#define JOY_LINE_MAX 80u  /* longest "+RCV=" line kept; longer lines raise JOY_EV_OVERFLOW */
 #define JOY_REPLY_MAX 40u /* buffer size for joy_api_take_reply() */
 
 /* One-shot events. Button bits match the RC_BTN_* slot numbers. */
@@ -57,8 +57,9 @@ typedef struct {
     JoyConfig cfg;
     bool ready;
     char line[JOY_LINE_MAX];
-    size_t line_len;
+    size_t line_len; /* 0 between lines: bytes are ignored until "+RCV=" */
     bool discarding;
+    uint8_t start_seen; /* how much of "+RCV=" the latest bytes spell */
     bool link_ok, armed;
     uint32_t last_good_ms;
     bool have_seq;
@@ -75,7 +76,8 @@ typedef struct {
 
 /* Returns false for an invalid config; the instance then reports no link forever. */
 bool joy_api_init(JoyApi *j, const JoyConfig *cfg);
-/* Raw bytes from the RYLR998 UART, any split. now_ms: a monotonic millisecond tick. */
+/* Raw bytes from the RYLR998 UART, any split. Bytes outside "+RCV=...\n" lines, such as
+ * other radios' packets on a shared channel, are ignored. now_ms: a monotonic millisecond tick. */
 void joy_api_feed(JoyApi *j, const uint8_t *data, size_t len, uint32_t now_ms);
 /* Call when the UART ring buffer dropped bytes. */
 void joy_api_report_overflow(JoyApi *j);

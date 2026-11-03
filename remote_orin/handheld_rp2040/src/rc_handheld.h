@@ -39,8 +39,9 @@ typedef struct {
     uint16_t held;
     uint32_t next_send_ms;
     char line[RC_HH_LINE_MAX];
-    size_t line_len;
+    size_t line_len; /* 0 between lines: bytes are ignored until "AT+SEND=" */
     bool discarding;
+    uint8_t start_seen; /* how much of "AT+SEND=" the latest bytes spell */
     bool link_up;
     uint8_t indicator; /* last reply: 0 ORIN, 1 JOY, 2 waiting, 3 fault */
     uint8_t state;     /* last reply: STM32 state, same values as Orin 0x81 byte 20 */
@@ -60,7 +61,8 @@ uint16_t rc_hh_sample(RcHandheld *h, const RcPad *pad);
 /* Writes the line due for the RYLR998 and returns its length, or 0 when none is due
  * or cap < RC_HH_SEND_MAX. No terminator is written. */
 size_t rc_hh_take_line(RcHandheld *h, uint32_t now_ms, char *out, size_t cap);
-/* Raw bytes from the RYLR998 UART, any split. */
+/* Raw bytes from the RYLR998 UART, any split. Bytes outside "AT+SEND=...\n" lines, such as
+ * other radios' packets on a shared channel, are ignored. */
 void rc_hh_feed(RcHandheld *h, const uint8_t *data, size_t len, uint32_t now_ms);
 /* Checks the reply timeout and returns the RC_HH_EV_* raised since the previous call. */
 uint16_t rc_hh_poll(RcHandheld *h, uint32_t now_ms);

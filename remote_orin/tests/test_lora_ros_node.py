@@ -53,13 +53,16 @@ class TestLoraRosNode(unittest.TestCase):
         self.handheld.close()
         self.remote.joy.close()
 
-    def run_for(self, seconds, connected=True, drive=0, turn=0, buttons=()):
+    def run_for(self, seconds, connected=True, drive=0, turn=0, buttons=(), noise=b''):
+        """noise：共用頻道上別人的封包，每一行前面兩邊都先收到它。"""
         mask = sum(1 << SLOT[name] for name in buttons)
         for _ in range(round(seconds / 0.01)):
             now_ms = int((self.clock() - self.start) * 1000)
             self.handheld.sample(connected, drive, turn, mask)
             line = self.handheld.take_line(now_ms)
             if line:
+                self.radio.orin.inbox.extend(noise)
+                self.radio.handheld.inbox.extend(noise)
                 self.radio.handheld.write(line)
             self.handheld.feed(self.radio.handheld.read(1024), now_ms)
             self.handheld.poll(now_ms)
@@ -184,6 +187,18 @@ class TestLoraRosNode(unittest.TestCase):
         self.assertEqual(self.wheels, (0.0, 0.0))
         self.assertFalse(self.out.samples[-1].connected)
         self.assertIn('遙控器失聯：停車，回到 JOY', self.out.logs)
+
+    def test_shared_channel_with_ground_station(self):
+        # 地面站的 LoRa2 封包：0xA5 開頭、二進位、沒有換行，剛好夾在每一行前面
+        noise = bytes([0xA5, 1, 2, 1, 54, 0, 1, 0]) + bytes(54) + b'\x5a\xa5'
+        self.remote.state = rl.AUTO
+        self.run_for(0.3, noise=noise)
+        self.run_for(1.0, drive=100, noise=noise)
+        self.assertEqual(self.wheels, (5.0, 5.0))
+        self.assertTrue(self.handheld.info().link_up)
+        self.assertTrue(self.out.samples[-1].connected)
+        self.assertNotIn('遙控器失聯：停車，回到 JOY', self.out.logs)
+        self.assertFalse(any('OVERFLOW' in text for text in self.out.logs))
 
     def test_close_publishes_zero(self):
         self.drive_ready()
