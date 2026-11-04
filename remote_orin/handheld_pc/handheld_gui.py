@@ -196,7 +196,7 @@ def main():
     gamepad = DemoGamepad() if args.demo else F710(args.pad)
     root = tk.Tk()
     panel = Panel(root, gamepad, port, f'遙控器測試面板 － {args.port}' + ('（示範）' if args.demo else ''))
-    panel.append(f'手把端：{args.port}，每 0.1 秒送一筆。關掉視窗就結束。')
+    panel.append(f'手把端：{args.port}，每 0.05 秒送一筆。關掉視窗就結束。')
     if not args.demo and not gamepad.read()[0]:
         panel.append('⚠ 找不到 F710：背面開關要切到 X，並插上接收器。')
 

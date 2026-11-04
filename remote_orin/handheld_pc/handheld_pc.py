@@ -17,7 +17,7 @@ from ctypes import wintypes
 from handheld_lib import (EV_ALARM, EV_INDICATOR, EV_LINK_LOST, EV_LINK_UP, INDICATOR_NAMES, RUMBLE_TEXT,
                           SLOT, SLOTS, STATE_NAMES, Handheld, tools)
 
-SAMPLE_PERIOD = 0.01  # gamepad sampled faster than the 10 Hz send rate, so short presses count
+SAMPLE_PERIOD = 0.01  # gamepad sampled faster than the 20 Hz send rate, so short presses count
 
 # XInput button bit for each slot name.
 XINPUT_BITS = {'START': 0x0010, 'BACK': 0x0020, 'X': 0x4000, 'Y': 0x8000, 'A': 0x1000, 'B': 0x2000,
@@ -195,7 +195,7 @@ def main():
     tools.utf8_console()
 
     port = tools.open_serial(args.port)
-    print(f'手把端：{args.port}，每 0.1 秒送一筆。按 q 結束。')
+    print(f'手把端：{args.port}，每 0.05 秒送一筆。按 q 結束。')
     try:
         if args.demo:
             demo = DemoGamepad()

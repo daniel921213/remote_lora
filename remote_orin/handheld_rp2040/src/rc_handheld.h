@@ -12,7 +12,7 @@
 #include "rc_proto.h"
 
 #define RC_HH_ADDRESS 1u            /* "+RCV=1,..." label; must match joy_api peer_address */
-#define RC_HH_SEND_PERIOD_MS 100u   /* 10 Hz */
+#define RC_HH_SEND_PERIOD_MS 50u    /* 20 Hz：遙控器一秒發幾次 */
 #define RC_HH_LINK_TIMEOUT_MS 300u  /* no valid reply for this long means the link is lost */
 #define RC_HH_ALARM_REPEAT_MS 3000u /* the lost-link rumble repeats this often */
 #define RC_HH_LINE_MAX 64u          /* longest reply line kept; longer lines are dropped */

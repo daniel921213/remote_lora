@@ -40,13 +40,14 @@ static void test_frames(void) {
     size_t n = rc_hh_take_line(&h, 1000, line, sizeof line);
     CHECK(n == 48 && memcmp(line, "+RCV=1,32,", 10) == 0 && memcmp(line + 42, ",0,0\r\n", 6) == 0);
     CHECK(decode_line(line, n, &in) && in.seq == 1 && in.flags == 0); /* no gamepad sample yet */
-    CHECK(rc_hh_take_line(&h, 1099, line, sizeof line) == 0);
-    CHECK(rc_hh_take_line(&h, 1100, line, 10) == 0); /* too small: not consumed */
-    n = rc_hh_take_line(&h, 1100, line, sizeof line);
+    const uint32_t p = RC_HH_SEND_PERIOD_MS;
+    CHECK(rc_hh_take_line(&h, 1000 + p - 1, line, sizeof line) == 0);
+    CHECK(rc_hh_take_line(&h, 1000 + p, line, 10) == 0); /* too small: not consumed */
+    n = rc_hh_take_line(&h, 1000 + p, line, sizeof line);
     CHECK(decode_line(line, n, &in) && in.seq == 2);
-    CHECK(rc_hh_take_line(&h, 1500, line, sizeof line) > 0); /* late: one line, no burst */
-    CHECK(rc_hh_take_line(&h, 1550, line, sizeof line) == 0);
-    CHECK(rc_hh_take_line(&h, 1600, line, sizeof line) > 0);
+    CHECK(rc_hh_take_line(&h, 1000 + 5 * p, line, sizeof line) > 0); /* late: one line, no burst */
+    CHECK(rc_hh_take_line(&h, 1000 + 5 * p + p / 2, line, sizeof line) == 0);
+    CHECK(rc_hh_take_line(&h, 1000 + 6 * p, line, sizeof line) > 0);
 
     /* Same bytes as the Python packer in rc_pc_test.py: seq 1, gamepad ok, all neutral. */
     rc_hh_init(&h, 0);
