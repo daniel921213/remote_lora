@@ -1,6 +1,6 @@
 """lora_ros_node 離線測試：真的手把 C 程式 → 記憶體裡的無線電 → 真的 joy_api → Remote。
 
-ROS 那一層換成 FakeOut，記下要發的 joint_command、/remote/mode 和要叫的 service。
+ROS 那一層換成 FakeOut，記下要發的 joint_command、hydraulic_command、/remote/mode 和要叫的 service。
 """
 
 import sys
@@ -20,12 +20,16 @@ from test_system import Clock, Radio  # noqa: E402
 class FakeOut:
     def __init__(self):
         self.logs, self.wheel_log, self.samples, self.modes, self.calls = [], [], [], [], []
+        self.hydraulic_log = []
 
     def log(self, text):
         self.logs.append(text)
 
     def wheels(self, left, right):
         self.wheel_log.append((left, right))
+
+    def hydraulic(self, value):
+        self.hydraulic_log.append(value)
 
     def sample(self, sample):
         self.samples.append(sample)
@@ -200,12 +204,42 @@ class TestLoraRosNode(unittest.TestCase):
         self.assertNotIn('遙控器失聯：停車，回到 JOY', self.out.logs)
         self.assertFalse(any('OVERFLOW' in text for text in self.out.logs))
 
+    def test_dpad_moves_blade_one_step_per_press(self):
+        self.run_for(0.3)
+        self.run_for(0.15, buttons=['十字鍵上'])  # 沒有 stm_bridge：不送
+        self.run_for(0.2)
+        self.assertIn('十字鍵上：STM32 沒回應，刀頭不能動', self.out.logs)
+        self.assertEqual(self.out.hydraulic_log, [])
+
+        self.drive_ready()
+        self.run_for(0.15, buttons=['十字鍵上'])  # 按住 0.15 秒也只算一下
+        self.run_for(0.2)
+        self.run_for(0.15, buttons=['十字鍵下'])
+        self.run_for(0.2)
+        self.assertEqual(self.out.hydraulic_log, [1, -1])
+        self.assertIn('十字鍵上：刀頭上升一下', self.out.logs)
+        self.assertIn('十字鍵下：刀頭下降一下', self.out.logs)
+        self.assertFalse(any('不支援' in text for text in self.out.logs))
+
+        self.run_for(0.15, buttons=['BACK'])  # 停車：送 0 取消，之後鎖住不送
+        self.run_for(0.15, buttons=['十字鍵上'])
+        self.run_for(0.2)
+        self.assertEqual(self.out.hydraulic_log, [1, -1, 0])
+        self.assertIn('十字鍵上 拒絕：BACK 鎖住中，先按 START', self.out.logs)
+
+        self.remote.state = rl.ESTOP
+        self.run_for(0.15, buttons=['十字鍵下'])
+        self.run_for(0.2)
+        self.assertIn('十字鍵下：STM32 不在 AUTO，刀頭不能動', self.out.logs)
+        self.assertEqual(self.out.hydraulic_log, [1, -1, 0])
+
     def test_close_publishes_zero(self):
         self.drive_ready()
         self.run_for(0.3, drive=100)
         self.radio.orin.close = lambda: None  # 假無線電沒有 close
         self.remote.close()
         self.assertEqual(self.wheels, (0.0, 0.0))
+        self.assertEqual(self.out.hydraulic_log, [0])
         self.assertFalse(self.out.samples[-1].connected)
 
 

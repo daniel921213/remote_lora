@@ -47,7 +47,8 @@ F710 ─▶ 手把 MCU ─▶ RYLR998 ～LoRa 923 MHz～ RYLR998 ─▶ Orin ─
 | RB | JOY ⇄ ORIN 切換。ORIN 模式下履帶以固定低速往前，代替還沒有的導航程式 |
 | B | 停車，回到 JOY |
 | BACK | 熄火並鎖定停車（STM32 進 ESTOP） |
-| START、X、Y、A、十字鍵 | 目前沒有功能 |
+| START、X、Y、A | 目前沒有功能 |
+| 十字鍵上／下 | 刀頭升降，按一下動一下（main_control 每次動 0.25 秒）。只有 `lora_ros_node.py`（`start_remote.sh` 那條路）有，`orin_bridge.py` 沒有 |
 
 ## 行走鎖（ARM）
 
@@ -94,5 +95,5 @@ Orin 用 `/dev/lora_gs` 那顆。不要用 `/dev/lora_rtcm`（920.5 MHz）：RTK
 
 - 筆電面板的文字還是舊的：LB 標成「解除停止鎖定」，等待狀態寫「按 R12 的 A」。
 - RB 目前只是單純切換，「釋放後等地面站接手」之後再做。
-- 刀頭升降（液壓）還沒接到按鍵。
+- 刀頭升降只能「按一下動一下」；要「按住一直動、放開就停」，封包要多帶按住的狀態（手把、Orin、RP2040 都要改）。
 - 封包還是文字格式，單程約 40 ms，之後改成二進位。

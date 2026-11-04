@@ -12,6 +12,8 @@
     BACK        呼叫 /estop（這條路只會 ESTOP，不會熄火），之後一直送 0 直到按 START
     START       STM32 在 ESTOP 時呼叫 /release_state 解除；也會解開 BACK 的鎖
     LB          STM32 在 AUTO 時呼叫 /release_state 申請 ARM（main_control 進 AUTO 也會自己 ARM）
+    十字鍵上／下  刀頭升降 → hydraulic_command +1／-1。按一下只動一下：main_control 動 0.25 秒就停，
+                而且只在 ARM 之後、沒在作業時才動。BACK、B、失聯時送 0，取消正在動的那一下
 STM32 狀態從 /stm/state、/stm/connected 收回來。另外照舊發 /remote/joy、/remote/connected、
 /remote/sticks_neutral；/remote/joy 的按鍵是「按一下只出現一筆」，不是按住的狀態。
 """
@@ -25,8 +27,8 @@ import time
 from dataclasses import dataclass
 
 from joy_lib import Joy
-from remote_logic import (AUTO, ESTOP, EV_ENGINE_OFF, EV_ENGINE_ON, EV_UNLOCK, IND_FAULT, STATE_NAMES_ZH,
-                          RemoteLogic)
+from remote_logic import (AUTO, ESTOP, EV_BLADE_DOWN, EV_BLADE_UP, EV_ENGINE_OFF, EV_ENGINE_ON, EV_LINK_LOST,
+                          EV_PARK, EV_UNLOCK, IND_FAULT, STATE_NAMES_ZH, RemoteLogic)
 
 BUTTON_NAMES = ('START', 'BACK', 'X', 'Y', 'A', 'B', 'RB', 'LB', 'UP', 'DOWN')
 LEFT_JOINT, RIGHT_JOINT = 'left_wheel_joint', 'right_wheel_joint'  # stm_bridge 預設的輪子名稱
@@ -72,7 +74,8 @@ class Remote:
         events = int(rc.events)
         command = self.logic.step(rc, self.state)
         for message in command.messages:
-            if not message.startswith('BACK'):  # BACK 在這條路只有 ESTOP，下面自己印
+            # BACK 在這條路只有 ESTOP；十字鍵在這條路有支援（刀頭升降）：都在下面自己印
+            if not message.startswith(('BACK', '十字鍵')):
                 self.out.log(message)
 
         if events & EV_ENGINE_OFF:
@@ -104,6 +107,20 @@ class Remote:
             else:
                 self.out.log('LB：呼叫 /release_state 申請 ARM')
                 self.out.release()
+        # 十字鍵：刀頭升降，按一下送一次
+        for bit, value, name in ((EV_BLADE_UP, 1, '十字鍵上'), (EV_BLADE_DOWN, -1, '十字鍵下')):
+            if not events & bit:
+                continue
+            if self.state != AUTO:
+                self.out.log(f'{name}：STM32 沒回應，刀頭不能動' if self.state is None
+                             else f'{name}：STM32 不在 AUTO，刀頭不能動')
+            elif self.held:
+                self.out.log(f'{name} 拒絕：BACK 鎖住中，先按 START')
+            else:
+                self.out.log(f'{name}：刀頭{"上升" if value > 0 else "下降"}一下')
+                self.out.hydraulic(value)
+        if events & (EV_ENGINE_OFF | EV_PARK | EV_LINK_LOST):
+            self.out.hydraulic(0)  # 停車、失聯：取消正在動的那一下
 
         left, right, indicator = command.left, command.right, command.indicator
         if self.held:
@@ -151,6 +168,7 @@ class Remote:
         try:
             if publish:
                 self.out.wheels(0.0, 0.0)
+                self.out.hydraulic(0)
                 self.out.sample(Sample(False, False, 0.0, 0.0, (0,) * len(BUTTON_NAMES)))
         finally:
             try:
@@ -206,7 +224,7 @@ def main(argv=None):
         from rclpy.node import Node
         from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
         from sensor_msgs.msg import Joy as JoyMessage, JointState
-        from std_msgs.msg import Bool, String, UInt8
+        from std_msgs.msg import Bool, Int8, String, UInt8
         from std_srvs.srv import Trigger
     except ImportError as error:
         parser.exit(1, 'ROS 2 environment is missing: %s\nSource ROS 2 setup.bash first.\n' % error)
@@ -222,6 +240,7 @@ def main(argv=None):
                                  reliability=ReliabilityPolicy.RELIABLE,
                                  durability=DurabilityPolicy.TRANSIENT_LOCAL)
             self.wheels_pub = self.create_publisher(JointState, 'joint_command', 10)
+            self.hydraulic_pub = self.create_publisher(Int8, 'hydraulic_command', 10)
             self.joy_pub = self.create_publisher(JoyMessage, '/remote/joy', qos)
             self.connected_pub = self.create_publisher(Bool, '/remote/connected', qos)
             self.neutral_pub = self.create_publisher(Bool, '/remote/sticks_neutral', qos)
@@ -255,6 +274,9 @@ def main(argv=None):
             message.name = [LEFT_JOINT, RIGHT_JOINT]
             message.velocity = [left * RPM_TO_RAD_S, right * RPM_TO_RAD_S]
             self.wheels_pub.publish(message)
+
+        def hydraulic(self, value):
+            self.hydraulic_pub.publish(Int8(data=value))
 
         def sample(self, sample):
             self.connected_pub.publish(Bool(data=sample.connected))
