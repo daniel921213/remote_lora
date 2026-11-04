@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="1176" viewBox="0 0 960 1176" font-family="'Microsoft JhengHei','PingFang TC','Noto Sans CJK TC','Noto Sans TC',sans-serif">
+  <defs>
+    <marker id="eb" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" orient="auto"><path d="M0 0L10 5L0 10z" fill="#2563eb"/></marker>
+    <marker id="sb" viewBox="0 0 10 10" refX="1" refY="5" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" orient="auto"><path d="M10 0L0 5L10 10z" fill="#2563eb"/></marker>
+    <marker id="eo" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" orient="auto"><path d="M0 0L10 5L0 10z" fill="#ea580c"/></marker>
+    <marker id="so" viewBox="0 0 10 10" refX="1" refY="5" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" orient="auto"><path d="M10 0L0 5L10 10z" fill="#ea580c"/></marker>
+  </defs>
+  <rect width="960" height="1176" fill="#ffffff"/>
+
+  <!-- title and legend -->
+  <text x="24" y="40" font-size="22" font-weight="700" fill="#0f172a">一組 LoRa、兩種資料：在總機合成一條，也在總機分成兩條</text>
+  <line x1="24" y1="67" x2="64" y2="67" stroke="#2563eb" stroke-width="3"/>
+  <text x="72" y="72" font-size="14" fill="#1e293b">遙控的句子（文字，開頭 +RCV= 或 AT+SEND=）</text>
+  <line x1="470" y1="67" x2="510" y2="67" stroke="#ea580c" stroke-width="3"/>
+  <text x="518" y="72" font-size="14" fill="#1e293b">人機介面的 LoRa2 封包（二進位，開頭 A5）</text>
+  <rect x="24" y="82" width="60" height="22" rx="11" fill="#dc2626"/>
+  <text x="54" y="98" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">分流點</text>
+  <text x="92" y="98" font-size="14" fill="#1e293b">總機：兩種資料在這裡合成一條、分成兩條。數字是 TCP 窗口號碼，兩邊都能遞資料。</text>
+
+  <!-- ===== laptop ===== -->
+  <rect x="24" y="116" width="912" height="476" rx="14" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="40" y="142" font-size="17" font-weight="700" fill="#0f172a">筆電</text>
+
+  <rect x="638" y="128" width="288" height="150" rx="10" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+  <text x="654" y="148" font-size="14" font-weight="700" fill="#9a3412">MowerHMI（人機介面）</text>
+  <rect x="654" y="158" width="256" height="36" rx="8" fill="#ffffff" stroke="#64748b"/>
+  <text x="782" y="181" font-size="14" fill="#0f172a" text-anchor="middle">畫面（你按按鈕的地方）</text>
+  <line x1="782" y1="194" x2="782" y2="226" stroke="#ea580c" stroke-width="2.5" marker-start="url(#so)" marker-end="url(#eo)"/>
+  <text x="770" y="215" font-size="12" fill="#9a3412" text-anchor="end">命令 8770 ↓</text>
+  <text x="794" y="215" font-size="12" fill="#9a3412">回覆 8771 ↑</text>
+  <rect x="654" y="226" width="256" height="44" rx="8" fill="#ffffff" stroke="#64748b"/>
+  <text x="782" y="245" font-size="14" font-weight="700" fill="#0f172a" text-anchor="middle">翻譯 laptop_gateway</text>
+  <text x="782" y="262" font-size="12" fill="#475569" text-anchor="middle">命令 ⇄ LoRa2 封包</text>
+
+  <rect x="48" y="210" width="260" height="60" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="178" y="235" font-size="15" font-weight="700" fill="#0f172a" text-anchor="middle">遙控 handheld_pc</text>
+  <text x="178" y="256" font-size="12.5" fill="#475569" text-anchor="middle">視窗 3｜讀 F710 手把</text>
+
+  <line x1="178" y1="270" x2="178" y2="330" stroke="#2563eb" stroke-width="2.5" marker-start="url(#sb)" marker-end="url(#eb)"/>
+  <text x="190" y="296" font-size="13" font-weight="700" fill="#2563eb">TCP 8789</text>
+  <text x="190" y="314" font-size="12" fill="#1e3a8a">+RCV=… 一行文字</text>
+  <line x1="782" y1="270" x2="782" y2="330" stroke="#ea580c" stroke-width="2.5" marker-start="url(#so)" marker-end="url(#eo)"/>
+  <text x="794" y="296" font-size="13" font-weight="700" fill="#ea580c">TCP 8768</text>
+  <text x="794" y="314" font-size="12" fill="#9a3412">A5… 封包</text>
+
+  <rect x="48" y="330" width="864" height="78" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="2.5"/>
+  <rect x="60" y="340" width="60" height="22" rx="11" fill="#dc2626"/>
+  <text x="90" y="356" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">分流點</text>
+  <text x="480" y="356" font-size="16" font-weight="700" fill="#0f172a" text-anchor="middle">筆電總機 lora_mux.py laptop（視窗 2）</text>
+  <text x="480" y="380" font-size="13" fill="#334155" text-anchor="middle">往下送：兩條合成一條。遙控先送，封包排在遙控後面（最多等 0.2 秒）</text>
+  <text x="480" y="399" font-size="13" fill="#334155" text-anchor="middle">往上收：看開頭分成兩條。AT+SEND= 給遙控，A5 給翻譯</text>
+
+  <line x1="474" y1="408" x2="474" y2="448" stroke="#2563eb" stroke-width="2.5" marker-start="url(#sb)" marker-end="url(#eb)"/>
+  <line x1="486" y1="408" x2="486" y2="448" stroke="#ea580c" stroke-width="2.5" marker-start="url(#so)" marker-end="url(#eo)"/>
+  <text x="500" y="433" font-size="13" fill="#334155">TCP 8798（兩種混在一起）</text>
+
+  <rect x="300" y="448" width="360" height="52" rx="8" fill="#ffffff" stroke="#64748b"/>
+  <text x="480" y="470" font-size="15" font-weight="700" fill="#0f172a" text-anchor="middle">對講機手 win_lora_bridge（視窗 1）</text>
+  <text x="480" y="490" font-size="12.5" fill="#475569" text-anchor="middle">筆電上唯一開 COM5 的程式</text>
+
+  <line x1="474" y1="500" x2="474" y2="536" stroke="#2563eb" stroke-width="2.5" marker-start="url(#sb)" marker-end="url(#eb)"/>
+  <line x1="486" y1="500" x2="486" y2="536" stroke="#ea580c" stroke-width="2.5" marker-start="url(#so)" marker-end="url(#eo)"/>
+  <text x="500" y="523" font-size="13" fill="#334155">COM5（UART 115200）</text>
+
+  <rect x="380" y="536" width="200" height="40" rx="8" fill="#f1f5f9" stroke="#64748b"/>
+  <text x="480" y="561" font-size="14" fill="#0f172a" text-anchor="middle">筆電的 LoRa 模組</text>
+
+  <!-- ===== air ===== -->
+  <line x1="474" y1="576" x2="474" y2="652" stroke="#2563eb" stroke-width="2.5" stroke-dasharray="6 5" marker-start="url(#sb)" marker-end="url(#eb)"/>
+  <line x1="486" y1="576" x2="486" y2="652" stroke="#ea580c" stroke-width="2.5" stroke-dasharray="6 5" marker-start="url(#so)" marker-end="url(#eo)"/>
+  <text x="500" y="610" font-size="14" font-weight="700" fill="#0f172a">空中 923 MHz</text>
+  <text x="500" y="628" font-size="12" fill="#475569">透傳：送什麼就收到什麼</text>
+
+  <!-- ===== car ===== -->
+  <rect x="24" y="636" width="912" height="470" rx="14" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="40" y="662" font-size="17" font-weight="700" fill="#0f172a">車上 Orin</text>
+
+  <rect x="380" y="652" width="200" height="40" rx="8" fill="#f1f5f9" stroke="#64748b"/>
+  <text x="480" y="677" font-size="14" fill="#0f172a" text-anchor="middle">車上的 LoRa 模組</text>
+
+  <line x1="474" y1="692" x2="474" y2="728" stroke="#2563eb" stroke-width="2.5" marker-start="url(#sb)" marker-end="url(#eb)"/>
+  <line x1="486" y1="692" x2="486" y2="728" stroke="#ea580c" stroke-width="2.5" marker-start="url(#so)" marker-end="url(#eo)"/>
+  <text x="500" y="715" font-size="13" fill="#334155">/dev/lora_gs（UART 115200）</text>
+
+  <rect x="300" y="728" width="360" height="52" rx="8" fill="#ffffff" stroke="#64748b"/>
+  <text x="480" y="750" font-size="15" font-weight="700" fill="#0f172a" text-anchor="middle">組員的 gs 服務 lora_bridge.py gs</text>
+  <text x="480" y="770" font-size="12.5" fill="#475569" text-anchor="middle">車上唯一開 /dev/lora_gs 的程式</text>
+
+  <line x1="474" y1="780" x2="474" y2="820" stroke="#2563eb" stroke-width="2.5" marker-start="url(#sb)" marker-end="url(#eb)"/>
+  <line x1="486" y1="780" x2="486" y2="820" stroke="#ea580c" stroke-width="2.5" marker-start="url(#so)" marker-end="url(#eo)"/>
+  <text x="500" y="805" font-size="13" fill="#334155">TCP 8768（兩種混在一起；這是車上的 8768）</text>
+
+  <rect x="48" y="820" width="864" height="78" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="2.5"/>
+  <rect x="60" y="830" width="60" height="22" rx="11" fill="#dc2626"/>
+  <text x="90" y="846" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">分流點</text>
+  <text x="480" y="846" font-size="16" font-weight="700" fill="#0f172a" text-anchor="middle">車上總機 lora_mux.py orin</text>
+  <text x="480" y="870" font-size="13" fill="#334155" text-anchor="middle">往下收：看開頭分成兩條。+RCV= 給遙控 node，A5 給 main_control</text>
+  <text x="480" y="889" font-size="13" fill="#334155" text-anchor="middle">往上送：兩條合成一條。遙控的回覆先送，封包排在後面</text>
+
+  <line x1="178" y1="898" x2="178" y2="952" stroke="#2563eb" stroke-width="2.5" marker-start="url(#sb)" marker-end="url(#eb)"/>
+  <text x="190" y="922" font-size="13" font-weight="700" fill="#2563eb">TCP 8789</text>
+  <text x="190" y="940" font-size="12" fill="#1e3a8a">+RCV=… 一行文字</text>
+  <line x1="782" y1="898" x2="782" y2="952" stroke="#ea580c" stroke-width="2.5" marker-start="url(#so)" marker-end="url(#eo)"/>
+  <text x="794" y="922" font-size="13" font-weight="700" fill="#ea580c">TCP 8788</text>
+  <text x="794" y="940" font-size="12" fill="#9a3412">A5… 封包</text>
+
+  <rect x="48" y="952" width="260" height="56" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="178" y="976" font-size="15" font-weight="700" fill="#0f172a" text-anchor="middle">遙控 node lora_ros_node</text>
+  <text x="178" y="997" font-size="12.5" fill="#475569" text-anchor="middle">算左右輪轉速，馬上回一句</text>
+
+  <rect x="400" y="956" width="160" height="48" rx="8" fill="#ffffff" stroke="#64748b"/>
+  <text x="480" y="977" font-size="14" font-weight="700" fill="#0f172a" text-anchor="middle">stm_bridge</text>
+  <text x="480" y="995" font-size="12" fill="#475569" text-anchor="middle">（組員）</text>
+
+  <rect x="652" y="952" width="260" height="56" rx="8" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+  <text x="782" y="976" font-size="15" font-weight="700" fill="#0f172a" text-anchor="middle">main_control（組員）</text>
+  <text x="782" y="997" font-size="12.5" fill="#475569" text-anchor="middle">處理命令、回 ACK、每秒報車況</text>
+
+  <line x1="308" y1="982" x2="400" y2="982" stroke="#2563eb" stroke-width="2.5" marker-end="url(#eb)"/>
+  <text x="354" y="973" font-size="11.5" fill="#1e3a8a" text-anchor="middle">joint_command</text>
+  <line x1="560" y1="982" x2="652" y2="982" stroke="#2563eb" stroke-width="2.5" marker-end="url(#eb)"/>
+  <text x="606" y="973" font-size="11.5" fill="#1e3a8a" text-anchor="middle">TCP 8772</text>
+
+  <line x1="776" y1="1008" x2="776" y2="1044" stroke="#2563eb" stroke-width="2.5" marker-end="url(#eb)"/>
+  <line x1="788" y1="1008" x2="788" y2="1044" stroke="#ea580c" stroke-width="2.5" marker-end="url(#eo)"/>
+  <text x="764" y="1031" font-size="12.5" fill="#334155" text-anchor="end">/dev/stm32（32-byte 命令，每秒 20 次）</text>
+  <rect x="702" y="1044" width="160" height="40" rx="8" fill="#f1f5f9" stroke="#64748b"/>
+  <text x="782" y="1069" font-size="15" font-weight="700" fill="#0f172a" text-anchor="middle">STM32</text>
+
+  <!-- captions -->
+  <text x="24" y="1134" font-size="13.5" fill="#334155">回覆（遙控的 AT+SEND=、人機介面的 ACK／STATUS）都沿同一條線倒著走。</text>
+  <text x="24" y="1156" font-size="13.5" fill="#334155">8768、8789 兩台都有，但各是自己那台電腦上的窗口，互不相干。</text>
+</svg>
