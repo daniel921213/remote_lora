@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# 一個指令開好遙控整條路：分流程式 → main_control → stm_bridge → lora_ros_node（--fake 時先開假 STM32）。
+# 一個指令開好遙控整條路：分流程式 → main_control → stm_bridge → lora_ros_node（不接車時先開假 STM32）。
 #
 #   ./start_remote.sh            真車：STM32 /dev/stm32（沒有就用 /dev/ttyACM0），LoRa 跟地面站共用
 #   ./start_remote.sh --fake     不接車：假 STM32、ROS_DOMAIN_ID=77、TCP 8790，碰不到正在用的系統
+#   ./start_remote.sh --virtual-stm   跟 --fake 一樣，但假 STM32 用組員的 virtual_stm.py（比較像新韌體）
 #   ./start_remote.sh --stop     上次沒關乾淨：關掉留下來的程式，把組員的 gs 服務開回來
 #   ./start_remote.sh --lora-port /dev/lora_gs   不共用：停掉組員的 gs 服務，遙控自己開 LoRa（結束時開回來）
 #   其他選項：--stm-port 路徑  --max-rpm N  --auto-rpm N
@@ -17,6 +18,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 COMMON=$(cd "$HERE/../common" && pwd)
 MOWER=${MOWER:-$HOME/fucking_mower}
 BRIDGE_DIR=$MOWER/rover2_ws/src/campusrover_base/ros2_stm_connect
+VSTM_DIR=$MOWER/mower_link_test/stm
 GS_SERVICE=fucking-mower-lora-gs.service
 GS_API_PORT=8767   # 組員 gs 服務的 API；資料埠是 8768
 GS_DATA_PORT=8768
@@ -25,6 +27,7 @@ MUX_REMOTE_PORT=8789
 FAKE_LINK=/tmp/fake-stm32
 
 FAKE=0
+VSTM=0  # 1：假 STM32 用組員的 virtual_stm.py
 STOP=0
 LORA=  # 空的：跟地面站共用
 STM=
@@ -32,11 +35,12 @@ NODE_ARGS=()
 while [ $# -gt 0 ]; do
     case $1 in
         --fake) FAKE=1 ;;
+        --virtual-stm) FAKE=1; VSTM=1 ;;
         --lora-port) LORA=$2; shift ;;
         --stm-port) STM=$2; shift ;;
         --max-rpm|--auto-rpm) NODE_ARGS+=("$1" "$2"); shift ;;
         --stop) STOP=1 ;;
-        -h|--help) sed -n '2,12s/^# \{0,1\}//p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,13s/^# \{0,1\}//p' "$0"; exit 0 ;;
         *) echo "不認得的選項：$1（-h 看用法）"; exit 2 ;;
     esac
     shift
@@ -54,13 +58,20 @@ export PYTHONDONTWRITEBYTECODE=1
 if [ $FAKE = 1 ]; then
     export ROS_DOMAIN_ID=77
     TCP=8790
-    STM=$FAKE_LINK
+    if [ $VSTM = 1 ]; then
+        STM=  # 組員的程式開好、印出 /dev/pts/N 才知道
+        MODE_TEXT='組員的假 STM32（virtual_stm.py）'
+    else
+        STM=$FAKE_LINK
+        MODE_TEXT='假 STM32'
+    fi
 else
     export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-50}
     TCP=8772
     if [ -z "$STM" ]; then
         if [ -e /dev/stm32 ]; then STM=/dev/stm32; else STM=/dev/ttyACM0; fi
     fi
+    MODE_TEXT='真車'
 fi
 
 PIDS=()
@@ -152,7 +163,8 @@ start() {  # 名稱 資料夾 指令…：輸出加上 [名稱] 印在畫面，�
 
 # 這支開的程式，指令要從頭完全對上（編輯器、grep、組員平常不加 -B -u 開的都不算），照關閉順序排
 OURS=('^python3 -B -u lora_ros_node\.py' '^python3 -B -u -m ros2_stm_connect\.stm_bridge'
-      '^python3 -B -u -m main_control' '^python3 -B -u lora_mux\.py' '^python3 -B -u pty_fake_stm32\.py')
+      '^python3 -B -u -m main_control' '^python3 -B -u lora_mux\.py' '^python3 -B -u pty_fake_stm32\.py'
+      '^python3 -B -u virtual_stm\.py')
 
 ours_running() {
     local pattern
@@ -184,6 +196,9 @@ fi
 # ---- 開之前先檢查 ----
 [ -d "$MOWER/main_control" ] || fail "找不到組員的 main_control：$MOWER/main_control"
 [ -d "$BRIDGE_DIR" ] || fail "找不到 stm_bridge：$BRIDGE_DIR"
+if [ $VSTM = 1 ]; then
+    [ -f "$VSTM_DIR/virtual_stm.py" ] || fail "找不到組員的假 STM32：$VSTM_DIR/virtual_stm.py"
+fi
 running=$(ours_running)
 [ -n "$running" ] && fail "上次沒關乾淨，還有這些在跑：
 $(ps -o pid=,args= -p "${running// /,}")
@@ -232,11 +247,16 @@ fi
 
 LOG_DIR=$HOME/remote_lora/logs/$(date +%Y%m%d-%H%M%S)$([ $FAKE = 1 ] && echo -fake)
 mkdir -p "$LOG_DIR"
-echo "模式 $([ $FAKE = 1 ] && echo '假 STM32' || echo '真車')｜STM32 $STM｜LoRa $LORA_TEXT｜ROS_DOMAIN_ID $ROS_DOMAIN_ID｜TCP $TCP"
+echo "模式 $MODE_TEXT｜STM32 ${STM:-開好才知道}｜LoRa $LORA_TEXT｜ROS_DOMAIN_ID $ROS_DOMAIN_ID｜TCP $TCP"
 echo "紀錄：$LOG_DIR"
 
 # ---- 依序開 ----
-if [ $FAKE = 1 ]; then
+if [ $VSTM = 1 ]; then
+    start virtual-stm "$VSTM_DIR" python3 -B -u virtual_stm.py
+    wait_until 5 "${PIDS[-1]}" grep -qs '^VIRTUAL_STM_PORT=' "$LOG_DIR/virtual-stm.log" \
+        || fail "組員的假 STM32 沒開起來，看 $LOG_DIR/virtual-stm.log"
+    STM=$(sed -n 's/^VIRTUAL_STM_PORT=//p' "$LOG_DIR/virtual-stm.log" | head -n 1)
+elif [ $FAKE = 1 ]; then
     start fake-stm32 "$HERE" python3 -B -u pty_fake_stm32.py --auto --link "$FAKE_LINK"
     wait_until 5 "${PIDS[-1]}" test -L "$FAKE_LINK" || fail "假 STM32 沒開起來，看 $LOG_DIR/fake-stm32.log"
 fi
